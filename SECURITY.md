@@ -2,7 +2,7 @@
 
 Please report security issues privately rather than opening a public issue.
 
-- Open a [private security advisory](https://github.com/quickieweb/quickieweb/security/advisories/new)
+- Open a [private security advisory](https://github.com/bissellator/quickieweb/security/advisories/new)
   on this repository, or
 - email **security@quickieweb.com**
 

@@ -57,7 +57,7 @@ to learn.
 ### 1. Get the code
 
 ```bash
-git clone https://github.com/quickieweb/quickieweb.git
+git clone https://github.com/bissellator/quickieweb.git
 cd quickieweb
 cp config.example.json config.json
 npm run fetch-editor
