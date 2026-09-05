@@ -1,0 +1,26 @@
+{
+  "name": "quickieweb",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Static web publishing on S3 + CloudFront: a template library, a customization layer, and an admin plane that costs nothing at rest.",
+  "license": "Apache-2.0",
+  "homepage": "https://quickieweb.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/quickieweb/quickieweb.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "fetch-editor": "node infra/fetch-editor.mjs",
+    "build": "node cli/build.mjs",
+    "deploy": "node cli/deploy.mjs",
+    "deploy:dry": "node cli/deploy.mjs --dry-run",
+    "templates": "node cli/templates.mjs list",
+    "validate": "node cli/validate-template.mjs templates",
+    "spec": "node cli/gen-spec.mjs",
+    "test": "node --test test/*.test.mjs && node cli/validate-template.mjs templates && node cli/gen-spec.mjs --check"
+  }
+}

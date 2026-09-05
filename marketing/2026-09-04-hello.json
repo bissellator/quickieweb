@@ -1,0 +1,12 @@
+{
+  "type": "article",
+  "slug": "2026-09-04-hello",
+  "date": "2026-09-04",
+  "status": "published",
+  "title": "Quickieweb is being built in the open",
+  "dek": "Early, unfinished, and running on itself from the first day.",
+  "category": "NEWS",
+  "categoryLabel": "News",
+  "pullQuote": "The platform's own site is a site on the platform. If it cannot build this page, it cannot build yours.",
+  "body": "<p>This page is served the same way every Quickieweb site is: rendered once, written to object storage, handed to a CDN. There is no separate marketing stack, no CMS behind it, and no server answering this request.</p><p>That is on purpose. A platform whose own site runs on something else is telling you something, and it is not flattering.</p><h2>Where it is</h2><p>Working today: the template engine and its validator, design tokens, static pages, multi-site provisioning, per-site membership, and publishing.</p><p>Not yet: public sign-up, custom domains, and per-site 404 pages. Those are named because a roadmap that only lists wins is a brochure.</p>"
+}

@@ -1,0 +1,101 @@
+{
+  "//": "One site. On the hosted platform this same shape lives in the platform bucket as accounts/sites/<siteId>.json, one per site.",
+  "siteId": "REPLACE-ME",
+  "site": {
+    "name": "REPLACE-ME",
+    "shortName": "REPLACE-ME",
+    "tagline": "",
+    "description": "",
+    "domain": "REPLACE-ME.com",
+    "baseUrl": "https://REPLACE-ME.com",
+    "author": "",
+    "authorUrl": "",
+    "org": "",
+    "orgUrl": "",
+    "locale": "en-US",
+    "language": "en-us",
+    "//nav": "Masthead links, rendered in order. Empty array = no nav.",
+    "nav": [
+      {
+        "label": "Archive",
+        "href": "/"
+      },
+      {
+        "label": "RSS",
+        "href": "/feed.xml"
+      }
+    ],
+    "//podcast": "Only used when a post has templateType \"podcast\".",
+    "podcast": {
+      "category": "Technology",
+      "explicit": false
+    }
+  },
+  "//template": "Which template renders this site. Leave \"version\" empty to track whatever the library has.",
+  "template": {
+    "id": "journal",
+    "version": ""
+  },
+  "//theme": "Token overrides for that template. Keys come from its template.json; run cli/theme.mjs to see them.",
+  "theme": {},
+  "//taxonomy": "Post categories offered in the admin and rendered as tags. Key -> label. Delete them all for an uncategorized site.",
+  "taxonomy": {
+    "categories": {
+      "NEWS": {
+        "label": "News"
+      },
+      "NOTES": {
+        "label": "Notes"
+      }
+    }
+  },
+  "//storage": "Where this site's bytes live. \"buckets\" gives the site its own buckets and IAM isolation (self-hosting). \"prefix\" puts it in shared buckets behind a shared distribution (the hosted platform).",
+  "storage": {
+    "driver": "buckets",
+    "region": "us-west-2",
+    "stagingBucket": "REPLACE-ME-site-staging",
+    "liveBucket": "REPLACE-ME-site",
+    "logBucket": "REPLACE-ME-site-logs",
+    "distributionId": "REPLACE-ME",
+    "distributionDomain": "REPLACE-ME.cloudfront.net",
+    "prefix": ""
+  },
+  "//members": "Who may edit this site. The first owner is also seeded by infra/seed-staging.mjs.",
+  "members": [
+    {
+      "email": "you@example.com",
+      "role": "owner"
+    }
+  ],
+  "//deploy": "Account-level deploy settings, shared by every site in this installation.",
+  "deploy": {
+    "lambdaRegion": "us-east-1",
+    "functionName": "qw-admin",
+    "functionUrl": "",
+    "googleClientId": "REPLACE-ME.apps.googleusercontent.com",
+    "certificateArn": "",
+    "logRetentionDays": 30,
+    "//platformBucket": "Template library + accounts. Separate from every site's content buckets.",
+    "platformBucket": "REPLACE-ME-platform",
+    "//legacy": "infra/* still reads these; they mirror storage.* for the single-site case.",
+    "bucket": "REPLACE-ME-site",
+    "stagingBucket": "REPLACE-ME-site-staging",
+    "logBucket": "REPLACE-ME-site-logs",
+    "region": "us-west-2",
+    "distributionId": "REPLACE-ME",
+    "distributionDomain": "REPLACE-ME.cloudfront.net",
+    "target": "s3+cloudfront"
+  },
+  "//hosted": "The hosted platform's own apex. Self-hosters leave this out entirely -- it is only used by infra/provision-hosted-dns.mjs and the shared distribution.",
+  "hosted": {
+    "domain": "REPLACE-ME.com",
+    "hostedZoneId": "",
+    "certificateArn": "",
+    "//tenantPattern": "Where a hosted site lives. One wildcard label -- <site>.quickieweb.com.",
+    "tenantPattern": "{site}.REPLACE-ME.com",
+    "tenantStagingBucket": "REPLACE-ME-sites-staging",
+    "tenantLiveBucket": "REPLACE-ME-sites-live",
+    "distributionId": "",
+    "distributionDomain": ""
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "//": "Template for the SHARED LIVE bucket. infra/provision-hosted.mjs substitutes __BUCKET__, __ACCOUNT__ and __DISTRIBUTION__. Kept in the repo because this policy is the thing standing between every tenant's site and the open internet, and it should be reviewable without reading a script.",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "//": "The only read grant. Scoped to ONE distribution by SourceArn: without that condition, any CloudFront distribution in any AWS account could name this bucket as its origin and serve it. That is the confused-deputy hole in every OAC example that omits the condition.",
+      "Sid": "ReadOnlyFromOurDistribution",
+      "Effect": "Allow",
+      "Principal": { "Service": "cloudfront.amazonaws.com" },
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::__BUCKET__/*",
+      "Condition": {
+        "StringEquals": { "AWS:SourceArn": "arn:aws:cloudfront::__ACCOUNT__:distribution/__DISTRIBUTION__" }
+      }
+    },
+    {
+      "//": "Everything must arrive over TLS.",
+      "Sid": "DenyPlaintext",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": ["arn:aws:s3:::__BUCKET__", "arn:aws:s3:::__BUCKET__/*"],
+      "Condition": { "Bool": { "aws:SecureTransport": "false" } }
+    },
+    {
+      "//": "The end-run guard. Deny unless the caller is a principal in OUR account, or is our distribution. An explicit Deny beats every Allow anywhere, so this holds even against a policy somebody adds later or an over-broad grant on some IAM role. Deliberately NOT written with NotPrincipal: NotPrincipal+Deny does not match assumed-role session ARNs against their role ARN, which is the classic way to lock yourself out of your own bucket. The two condition keys are ANDed, so a request is denied only when it is neither ours nor the CDN's -- and an anonymous request, which carries neither key, fails both tests and is denied.",
+      "Sid": "DenyAnonymousAndCrossAccount",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": ["arn:aws:s3:::__BUCKET__", "arn:aws:s3:::__BUCKET__/*"],
+      "Condition": {
+        "StringNotEquals": {
+          "aws:PrincipalAccount": "__ACCOUNT__",
+          "aws:SourceArn": "arn:aws:cloudfront::__ACCOUNT__:distribution/__DISTRIBUTION__"
+        }
+      }
+    }
+  ]
+}

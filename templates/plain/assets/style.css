@@ -1,0 +1,90 @@
+/* Plain -- one column, system fonts, no ornament.
+   Values come from /assets/theme.css, generated from this template's tokens. */
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-ink: var(--dark-color-ink);
+    --color-paper: var(--dark-color-paper);
+    --color-link: var(--dark-color-link);
+    --color-faint: var(--dark-color-faint);
+  }
+}
+:root[data-theme="dark"] {
+  --color-ink: var(--dark-color-ink);
+  --color-paper: var(--dark-color-paper);
+  --color-link: var(--dark-color-link);
+  --color-faint: var(--dark-color-faint);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0 auto; padding: 2rem 1.25rem 4rem;
+  max-width: var(--layout-measure);
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  font-size: 17px; line-height: 1.6;
+}
+a { color: var(--color-link); }
+.top { display: flex; flex-wrap: wrap; gap: .75rem 1.25rem; align-items: baseline; margin-bottom: 2.5rem; }
+.top .name { font-weight: 700; text-decoration: none; color: var(--color-ink); }
+.top .name img { max-height: 32px; width: auto; display: block; }
+.top nav a { margin-right: .75rem; font-size: .9rem; }
+.tagline { color: var(--color-faint); margin: 0 0 2rem; }
+.entry { margin: 0 0 2.5rem; }
+.entry h2 { font-size: 1.25rem; margin: 0 0 .25rem; }
+.entry h2 a { text-decoration: none; }
+.entry h2 a:hover { text-decoration: underline; }
+.entry.full h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 .5rem; }
+.meta { color: var(--color-faint); font-size: .85rem; margin: 0 0 .75rem; }
+.dek { font-size: 1.05rem; color: var(--color-faint); margin: 0 0 1.5rem; }
+blockquote {
+  margin: 2rem 0; padding-left: 1rem;
+  border-left: 3px solid var(--color-faint); font-style: italic;
+}
+audio { width: 100%; margin: 1rem 0; }
+img { max-width: 100%; height: auto; }
+pre { overflow-x: auto; }
+.bottom { border-top: 1px solid var(--color-faint); margin-top: 3rem; padding-top: 1rem; }
+.bottom p { color: var(--color-faint); font-size: .8rem; margin: 0; }
+
+/* ---------------------------------------------------------------- search */
+.search { position: relative; margin: -1rem 0 2rem; }
+.search input {
+  width: 100%; padding: .4rem .55rem; font: inherit; font-size: .9rem;
+  color: var(--color-ink); background: transparent;
+  border: 1px solid var(--color-faint); border-radius: 3px;
+}
+.search input:focus { outline: 2px solid var(--color-link); outline-offset: -1px; }
+.search-results {
+  position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + .3rem);
+  max-height: 60vh; overflow-y: auto;
+  background: var(--color-paper); border: 1px solid var(--color-faint); border-radius: 3px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.15);
+}
+.qw-s-hit {
+  display: block; padding: .5rem .65rem; text-decoration: none; color: var(--color-ink);
+  border-bottom: 1px solid var(--color-faint);
+}
+.qw-s-hit:last-child { border-bottom: 0; }
+.qw-s-hit:hover, .qw-s-hit.is-active { background: rgba(127,127,127,.12); }
+.qw-s-title { display: block; font-weight: 600; }
+.qw-s-meta { display: block; font-size: .72rem; color: var(--color-faint); }
+.qw-s-dek { display: block; font-size: .84rem; color: var(--color-faint); margin-top: .15rem; }
+.qw-s-msg { margin: 0; padding: .7rem; font-size: .85rem; color: var(--color-faint); }
+.qw-s-hit mark { background: var(--color-link); color: var(--color-paper); padding: 0 .1em; }
+
+/* ------------------------------------------------------------- code */
+pre {
+  background: rgba(127,127,127,.10); border-radius: 4px;
+  padding: .8rem .95rem; margin: 1.5rem 0; overflow-x: auto;
+}
+pre code {
+  font-family: ui-monospace, SF Mono, Menlo, Consolas, monospace;
+  font-size: .84rem; line-height: 1.55; background: none; padding: 0; white-space: pre;
+}
+:not(pre) > code {
+  font-family: ui-monospace, SF Mono, Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(127,127,127,.14);
+  border-radius: 3px; padding: .08em .3em;
+}

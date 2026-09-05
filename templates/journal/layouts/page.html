@@ -1,0 +1,14 @@
+{{> head}}
+<main class="wrap">
+<article class="article page">
+  <h1 class="article-title">{{page.title}}</h1>
+{{#if page.dek}}  <p class="article-dek">{{page.dek}}</p>
+{{/if}}
+  <div class="article-body">
+{{{page.bodyHtml}}}
+  </div>
+{{#if page.updatedDisplay}}
+  <p class="page-updated">Last updated {{page.updatedDisplay}}</p>
+{{/if}}</article>
+</main>
+{{> footer}}

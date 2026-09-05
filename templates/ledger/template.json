@@ -1,0 +1,137 @@
+{
+  "id": "ledger",
+  "name": "Ledger",
+  "version": "1.2.0",
+  "engine": "quickieweb-template@1",
+  "description": "A dense, dated index in the shape of a table. For sites where the archive is the point.",
+  "author": "Quickieweb",
+  "license": "MIT",
+  "supports": [
+    "article",
+    "podcast",
+    "page"
+  ],
+  "layouts": {
+    "index": "layouts/index.html",
+    "article": "layouts/article.html",
+    "page": "layouts/page.html",
+    "404": "layouts/404.html"
+  },
+  "partials": {
+    "head": "partials/head.html",
+    "foot": "partials/foot.html",
+    "row": {
+      "path": "partials/row.html",
+      "context": "post"
+    }
+  },
+  "styles": [
+    "assets/style.css"
+  ],
+  "tokens": {
+    "color.ink": {
+      "type": "color",
+      "default": "#101418",
+      "label": "Text",
+      "group": "Color"
+    },
+    "color.paper": {
+      "type": "color",
+      "default": "#fbfaf8",
+      "label": "Background",
+      "group": "Color"
+    },
+    "color.rule": {
+      "type": "color",
+      "default": "#d8d4cc",
+      "label": "Rules",
+      "group": "Color"
+    },
+    "color.faint": {
+      "type": "color",
+      "default": "#7b8189",
+      "label": "Muted text",
+      "group": "Color"
+    },
+    "color.accent": {
+      "type": "color",
+      "default": "#0f6e5c",
+      "label": "Accent",
+      "group": "Color"
+    },
+    "dark.color.ink": {
+      "type": "color",
+      "default": "#e8e6e1",
+      "label": "Text",
+      "group": "Color (dark mode)"
+    },
+    "dark.color.paper": {
+      "type": "color",
+      "default": "#101216",
+      "label": "Background",
+      "group": "Color (dark mode)"
+    },
+    "dark.color.rule": {
+      "type": "color",
+      "default": "#2b2f36",
+      "label": "Rules",
+      "group": "Color (dark mode)"
+    },
+    "dark.color.faint": {
+      "type": "color",
+      "default": "#8d939b",
+      "label": "Muted text",
+      "group": "Color (dark mode)"
+    },
+    "dark.color.accent": {
+      "type": "color",
+      "default": "#4fc0a6",
+      "label": "Accent",
+      "group": "Color (dark mode)"
+    },
+    "font.body": {
+      "type": "font",
+      "default": "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
+      "label": "Body font",
+      "group": "Type"
+    },
+    "font.mono": {
+      "type": "font",
+      "default": "ui-monospace, SF Mono, Cascadia Mono, Menlo, Consolas, monospace",
+      "label": "Dates and metadata",
+      "group": "Type"
+    },
+    "layout.measure": {
+      "type": "select",
+      "default": "42rem",
+      "label": "Column width",
+      "group": "Layout",
+      "options": [
+        {
+          "value": "36rem",
+          "label": "Narrow"
+        },
+        {
+          "value": "42rem",
+          "label": "Standard"
+        },
+        {
+          "value": "52rem",
+          "label": "Wide"
+        }
+      ]
+    },
+    "show_dek": {
+      "type": "boolean",
+      "default": true,
+      "label": "Show summaries in the index",
+      "group": "Layout"
+    },
+    "logo": {
+      "type": "image",
+      "optional": true,
+      "label": "Masthead logo",
+      "group": "Branding"
+    }
+  }
+}

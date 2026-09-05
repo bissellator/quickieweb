@@ -1,0 +1,9 @@
+{{> head}}
+{{#if site.tagline}}<p class="tagline">{{site.tagline}}</p>
+{{/if}}{{#each posts}}<article class="entry">
+  <h2><a href="{{url}}">{{title}}</a></h2>
+  <p class="meta"><time datetime="{{dateIso}}">{{dateDisplay}}</time>{{#if categoryLabel}} &middot; {{categoryLabel}}{{/if}}{{#if isPodcast}} &middot; audio{{/if}}</p>
+{{#if dek}}  <p>{{dek}}</p>
+{{/if}}</article>
+{{else}}<p class="meta">Nothing published yet.</p>
+{{/each}}{{> footer}}

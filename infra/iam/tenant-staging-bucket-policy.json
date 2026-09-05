@@ -1,0 +1,25 @@
+{
+  "//": "Template for the SHARED STAGING bucket. infra/provision-hosted.mjs substitutes __BUCKET__ and __ACCOUNT__. Note what is absent: there is no grant to CloudFront, because this bucket is not an origin on any distribution. Unpublished drafts are unreachable by structure, not by a path condition somebody could get wrong.",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyPlaintext",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": ["arn:aws:s3:::__BUCKET__", "arn:aws:s3:::__BUCKET__/*"],
+      "Condition": { "Bool": { "aws:SecureTransport": "false" } }
+    },
+    {
+      "//": "Nothing outside this account touches drafts. No CloudFront exception here, deliberately: if staging ever needs to be served for preview, that is an authenticated path through the Lambda or a signed-cookie distribution, and adding it should require editing this file rather than happening by accident.",
+      "Sid": "DenyAnonymousAndCrossAccount",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": ["arn:aws:s3:::__BUCKET__", "arn:aws:s3:::__BUCKET__/*"],
+      "Condition": {
+        "StringNotEquals": { "aws:PrincipalAccount": "__ACCOUNT__" }
+      }
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+  <li class="card">
+    <a class="card-link" href="{{url}}">
+      <div class="card-kicker">
+{{#if categoryLabel}}        <span class="tag tag-{{categorySlug}}">{{categoryLabel}}</span>
+{{/if}}        <time datetime="{{dateIso}}">{{dateDisplay}}</time>
+{{#if isPodcast}}        <span class="tag tag-audio">Audio</span>
+{{/if}}      </div>
+      <h2 class="card-title">{{title}}</h2>
+{{#if dek}}      <p class="card-dek">{{dek}}</p>
+{{/if}}{{#if source.publisher}}      <p class="card-source">re: {{source.publisher}}</p>
+{{/if}}    </a>
+  </li>

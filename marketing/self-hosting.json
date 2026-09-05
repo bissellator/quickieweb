@@ -1,0 +1,9 @@
+{
+  "type": "page",
+  "slug": "self-hosting",
+  "status": "published",
+  "title": "Run it yourself",
+  "dek": "The whole thing is open source. Point it at your own AWS account and it is yours.",
+  "nav": { "label": "Self-hosting", "order": 3 },
+  "body": "<p>Quickieweb is one codebase shipped two ways.</p><p><strong>Hosted</strong> is this site. We run the infrastructure, you get a subdomain, and the template library lives with us.</p><p><strong>Self-hosted</strong> is the same code in your own AWS account. Your buckets, your CDN, your domain, your bill — which for a small site rounds to the cost of a coffee a year. Nothing calls home, and there is no feature held back to make the hosted version look better.</p><h2>What is different</h2><p>Exactly one field. A self-hosted site gets its own buckets and its own IAM isolation. A hosted site is a prefix inside shared buckets. Both run the same renderer, the same templates and the same editor.</p><p>That constraint is deliberate: the moment the open-source version becomes a demo of the hosted one, it stops being worth running.</p>"
+}

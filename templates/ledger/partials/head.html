@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="{{site.lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{seo.title}}</title>
+<meta name="description" content="{{seo.description}}">
+<link rel="canonical" href="{{seo.canonical}}">
+{{#if seo.noindex}}<meta name="robots" content="noindex">
+{{/if}}<meta property="og:type" content="article">
+<meta property="og:title" content="{{seo.title}}">
+<meta property="og:description" content="{{seo.description}}">
+<meta property="og:url" content="{{seo.canonical}}">
+<link rel="icon" href="{{site.faviconUrl}}" type="image/svg+xml">
+<link rel="alternate" type="application/rss+xml" title="{{site.name}}" href="{{site.feedUrl}}">
+{{#each template.stylesheets}}<link rel="stylesheet" href="{{.}}">
+{{/each}}{{#each template.scripts}}<script src="{{.}}" defer></script>
+{{/each}}{{{seo.jsonLd}}}
+</head>
+<body>
+<header class="head">
+  <div class="head-main">
+{{#if theme.logo}}    <a class="mark" href="{{site.homeUrl}}"><img src="{{theme.logo}}" alt="{{site.name}}"></a>
+{{else}}    <a class="mark" href="{{site.homeUrl}}">{{site.name}}</a>
+{{/if}}{{#if site.tagline}}    <p class="tag">{{site.tagline}}</p>
+{{/if}}  </div>
+{{#if nav}}  <nav>{{#each nav}}<a href="{{href}}"{{#if external}} rel="noopener"{{/if}}{{#if current}} aria-current="page"{{/if}}>{{label}}</a>{{/each}}</nav>
+{{/if}}  <form class="search" data-qw-search hidden role="search">
+    <input type="search" data-qw-search-input placeholder="Search  /" aria-label="Search this site" autocomplete="off" spellcheck="false">
+    <div class="search-results" data-qw-search-results hidden></div>
+  </form>
+</header>
+<main>

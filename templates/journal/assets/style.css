@@ -1,0 +1,287 @@
+/* Journal -- the template's own stylesheet.
+   One file, no framework, no build step, no third-party request.
+
+   Every colour, font and measure here is a CSS custom property that
+   /assets/theme.css defines from this template's tokens and the site's
+   overrides. Hardcoding a value below takes it away from the customer; add a
+   token to template.json instead.
+
+   Dark mode remaps the same variables to the `dark.*` tokens, so a site that
+   picks its own accent picks its own dark accent too rather than inheriting
+   ours. */
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-ink:       var(--dark-color-ink);
+    --color-ink-soft:  var(--dark-color-ink-soft);
+    --color-ink-faint: var(--dark-color-ink-faint);
+    --color-paper:     var(--dark-color-paper);
+    --color-card:      var(--dark-color-card);
+    --color-rule:      var(--dark-color-rule);
+    --color-accent:    var(--dark-color-accent);
+    --color-accent2:   var(--dark-color-accent2);
+  }
+}
+:root[data-theme="dark"] {
+  --color-ink:       var(--dark-color-ink);
+  --color-ink-soft:  var(--dark-color-ink-soft);
+  --color-ink-faint: var(--dark-color-ink-faint);
+  --color-paper:     var(--dark-color-paper);
+  --color-card:      var(--dark-color-card);
+  --color-rule:      var(--dark-color-rule);
+  --color-accent:    var(--dark-color-accent);
+  --color-accent2:   var(--dark-color-accent2);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  font-size: 17px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; }
+
+/* ------------------------------------------------------------- masthead */
+.masthead {
+  border-bottom: 3px double var(--color-rule);
+  padding: 2.2rem 1.5rem 1.1rem;
+  text-align: center;
+}
+.wordmark {
+  display: inline-block;
+  font-family: var(--font-display);
+  font-size: clamp(1.9rem, 6vw, 3.1rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  text-decoration: none;
+  line-height: 1.05;
+}
+.masthead-tag {
+  margin: 0.5rem 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+  color: var(--color-ink-faint);
+}
+.masthead-nav {
+  margin-top: 1.1rem;
+  display: flex; gap: 1.4rem; justify-content: center; flex-wrap: wrap;
+  font-family: var(--font-mono); font-size: 0.74rem;
+  text-transform: uppercase; letter-spacing: 0.09em;
+}
+.masthead-nav a { color: var(--color-ink-soft); text-decoration: none; padding-bottom: 2px; }
+.masthead-nav a:hover { color: var(--color-accent); border-bottom: 1px solid var(--color-accent); }
+
+.wrap { max-width: 46rem; margin: 0 auto; padding: 2.6rem 1.5rem 1rem; }
+
+/* ----------------------------------------------------------------- lede */
+.lede { border-bottom: 1px solid var(--color-rule); padding-bottom: 2rem; margin-bottom: 2.4rem; }
+.lede h1 {
+  font-family: var(--font-display);
+  font-size: clamp(1.5rem, 4.2vw, 2.15rem);
+  line-height: 1.25; font-weight: 700; margin: 0 0 0.9rem;
+  letter-spacing: -0.015em;
+}
+.lede p { margin: 0; color: var(--color-ink-soft); max-width: var(--layout-measure); }
+
+/* ---------------------------------------------------------------- cards */
+.cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 1.1rem; }
+.card {
+  background: var(--color-card);
+  border: 1px solid var(--color-rule);
+  border-left: 3px solid var(--color-accent);
+  border-radius: 3px;
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.card:hover { transform: translateY(-2px); box-shadow: 0 6px 22px rgba(0,0,0,.09); }
+.card-link { display: block; padding: 1.3rem 1.5rem; text-decoration: none; }
+.card-kicker, .article-kicker {
+  display: flex; align-items: center; gap: .8rem; flex-wrap: wrap;
+  font-family: var(--font-mono); font-size: .68rem;
+  text-transform: uppercase; letter-spacing: .1em; color: var(--color-ink-faint);
+  margin-bottom: .7rem;
+}
+.card-title {
+  font-family: var(--font-display); font-size: 1.4rem; line-height: 1.25;
+  margin: 0 0 .5rem; font-weight: 700; letter-spacing: -0.01em;
+}
+.card:hover .card-title { color: var(--color-accent); }
+.card-dek { margin: 0 0 .7rem; color: var(--color-ink-soft); font-size: .95rem; }
+.card-source { margin: 0; font-family: var(--font-mono); font-size: .7rem; color: var(--color-ink-faint); }
+
+/* ------------------------------------------------------------------ tag */
+.tag {
+  display: inline-block; padding: .2rem .5rem; border-radius: 2px;
+  background: var(--color-accent); color: #fff; font-weight: 600;
+  font-size: .64rem; letter-spacing: .08em;
+}
+/* Per-category colours are opt-in: .tag-<category key, lowercased>.
+   e.g.  .tag-notes { background: var(--color-accent2); }  */
+.tag-audio { background: #5b3a8e; }
+
+/* -------------------------------------------------------------- article */
+.article-title {
+  font-family: var(--font-display);
+  font-size: clamp(1.85rem, 5.5vw, 2.75rem);
+  line-height: 1.15; font-weight: 700; margin: 0 0 .8rem;
+  letter-spacing: -0.02em;
+}
+.article-dek {
+  font-family: var(--font-display); font-size: 1.2rem; font-style: italic;
+  color: var(--color-ink-soft); margin: 0 0 2rem; line-height: 1.45;
+  max-width: var(--layout-measure);
+}
+.section { margin: 2.4rem 0; }
+.section h2 {
+  font-family: var(--font-mono); font-size: .74rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .14em; color: var(--color-accent);
+  margin: 0 0 .9rem; padding-bottom: .45rem; border-bottom: 1px solid var(--color-rule);
+}
+.section p { margin: 0 0 1.1rem; max-width: var(--layout-measure); }
+.section code {
+  font-family: var(--font-mono); font-size: .87em;
+  background: var(--color-card); border: 1px solid var(--color-rule);
+  padding: .1rem .3rem; border-radius: 2px;
+}
+.section a { color: var(--color-accent); text-underline-offset: 2px; }
+
+/* Free-form bodies (the admin's CKEditor, and any article that writes its own
+   headings instead of the five fixed ones) get the same treatment. Without
+   this, everything authored through the admin renders as unstyled defaults. */
+.article-body { margin: 2.4rem 0; }
+.article-body h2 {
+  font-family: var(--font-mono); font-size: .74rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .14em; color: var(--color-accent);
+  margin: 2.4rem 0 .9rem; padding-bottom: .45rem; border-bottom: 1px solid var(--color-rule);
+}
+.article-body h2:first-child { margin-top: 0; }
+.article-body h3 {
+  font-family: var(--font-display); font-size: 1.1rem; font-weight: 700;
+  margin: 1.8rem 0 .6rem; max-width: var(--layout-measure);
+}
+.article-body p { margin: 0 0 1.1rem; max-width: var(--layout-measure); }
+.article-body ul, .article-body ol { margin: 0 0 1.1rem 1.2rem; max-width: var(--layout-measure); }
+.article-body li { margin: 0 0 .4rem; }
+.article-body code {
+  font-family: var(--font-mono); font-size: .87em;
+  background: var(--color-card); border: 1px solid var(--color-rule);
+  padding: .1rem .3rem; border-radius: 2px;
+}
+.article-body a { color: var(--color-accent); text-underline-offset: 2px; }
+.article-body img { max-width: 100%; height: auto; border-radius: 3px; }
+.article-body blockquote {
+  margin: 1.6rem 0; padding: 0 0 0 1.1rem;
+  border-left: 2px solid var(--color-rule);
+  color: var(--color-ink-soft); font-style: italic; max-width: var(--layout-measure);
+}
+
+/* ---------------------------------------------------------- source card */
+.source-card {
+  background: var(--color-card); border: 1px solid var(--color-rule);
+  border-left: 3px solid var(--color-ink-faint);
+  padding: 1rem 1.2rem; margin: 0 0 2.2rem; border-radius: 3px;
+}
+.source-label {
+  margin: 0 0 .35rem; font-family: var(--font-mono); font-size: .64rem;
+  text-transform: uppercase; letter-spacing: .12em; color: var(--color-ink-faint);
+}
+.source-title { margin: 0 0 .3rem; font-family: var(--font-display); font-size: 1.03rem; font-weight: 600; }
+.source-title a { color: var(--color-ink); text-underline-offset: 2px; }
+.source-title a:hover { color: var(--color-accent); }
+.source-meta { margin: 0; font-family: var(--font-mono); font-size: .72rem; color: var(--color-ink-faint); }
+.source-meta a { color: var(--color-ink-soft); }
+
+/* ------------------------------------------------------------------ pull */
+.pull {
+  margin: 2.4rem 0; padding: 0 0 0 1.4rem;
+  border-left: 3px solid var(--color-accent);
+  font-family: var(--font-display); font-size: 1.4rem; font-style: italic;
+  line-height: 1.35; color: var(--color-ink);
+}
+.empty { color: var(--color-ink-faint); font-family: var(--font-mono); font-size: .85rem; }
+
+/* --------------------------------------------------------------- footer */
+.footer {
+  border-top: 3px double var(--color-rule);
+  margin-top: 3.5rem; padding: 2rem 1.5rem 3rem;
+  text-align: center;
+}
+.footer-meta {
+  font-family: var(--font-mono); font-size: .7rem; color: var(--color-ink-faint);
+  max-width: 38rem; margin: 0 auto .6rem; line-height: 1.7;
+}
+.footer-meta a { color: var(--color-ink-soft); }
+.footer-note { opacity: .8; }
+
+@media (max-width: 560px) {
+  body { font-size: 16px; }
+  .wrap { padding: 1.8rem 1.1rem 1rem; }
+  .card-link { padding: 1.1rem 1.1rem; }
+}
+
+/* --------------------------------------------------- template additions */
+.wordmark-logo img { max-height: 40px; width: auto; display: block; margin: 0 auto; }
+.page-updated {
+  margin: 2rem 0 0; font-family: var(--font-mono); font-size: .72rem;
+  color: var(--color-ink-faint);
+}
+.tags { margin: 2rem 0 0; }
+.tag-chip {
+  display: inline-block; padding: .15rem .45rem; margin-right: .3rem;
+  border: 1px solid var(--color-rule); border-radius: 2px;
+  font-family: var(--font-mono); font-size: .68rem; color: var(--color-ink-faint);
+}
+.article-body img { max-width: 100%; height: auto; }
+.article-body pre { overflow-x: auto; }
+
+/* ---------------------------------------------------------------- search */
+.site-search { position: relative; max-width: 22rem; margin: .9rem auto 0; }
+.site-search input {
+  width: 100%; padding: .45rem .7rem; font: inherit; font-size: .85rem;
+  color: var(--color-ink); background: var(--color-card);
+  border: 1px solid var(--color-rule); border-radius: 3px;
+}
+.site-search input:focus { outline: 2px solid var(--color-accent); outline-offset: -1px; }
+.site-search-results {
+  position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + .3rem);
+  max-height: 60vh; overflow-y: auto; text-align: left;
+  background: var(--color-card); border: 1px solid var(--color-rule);
+  border-radius: 3px; box-shadow: 0 8px 28px rgba(0,0,0,.16);
+}
+.qw-s-hit {
+  display: block; padding: .6rem .8rem; text-decoration: none;
+  border-bottom: 1px solid var(--color-rule);
+}
+.qw-s-hit:last-child { border-bottom: 0; }
+.qw-s-hit:hover, .qw-s-hit.is-active { background: var(--color-paper); }
+.qw-s-title { display: block; font-family: var(--font-display); font-weight: 600; font-size: .95rem; }
+.qw-s-meta {
+  display: block; font-family: var(--font-mono); font-size: .66rem;
+  color: var(--color-ink-faint); margin-top: .15rem;
+}
+.qw-s-dek { display: block; font-size: .82rem; color: var(--color-ink-soft); margin-top: .2rem; }
+.qw-s-msg { margin: 0; padding: .8rem; font-size: .85rem; color: var(--color-ink-faint); }
+.qw-s-hit mark { background: var(--color-accent); color: #fff; padding: 0 .1em; border-radius: 2px; }
+
+/* ------------------------------------------------------------- code */
+.article-body pre {
+  background: var(--color-card); border: 1px solid var(--color-rule);
+  border-left: 3px solid var(--color-accent2); border-radius: 3px;
+  padding: .85rem 1rem; margin: 1.6rem 0; overflow-x: auto;
+}
+.article-body pre code {
+  font-family: var(--font-mono); font-size: .82rem; line-height: 1.55;
+  color: var(--color-ink); background: none; padding: 0; white-space: pre;
+}
+.article-body :not(pre) > code {
+  font-family: var(--font-mono); font-size: .86em;
+  background: var(--color-card); border: 1px solid var(--color-rule);
+  border-radius: 2px; padding: .08em .3em;
+}

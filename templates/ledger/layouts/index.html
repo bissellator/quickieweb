@@ -1,0 +1,6 @@
+{{> head}}
+{{#if site.description}}<p class="lede">{{site.description}}</p>
+{{/if}}{{#if posts}}<ol class="rows">
+{{#each posts}}{{> row}}{{/each}}</ol>
+{{else}}<p class="empty">Nothing published yet.</p>
+{{/if}}{{> foot}}

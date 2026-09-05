@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="{{site.lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{seo.title}}</title>
+<meta name="description" content="{{seo.description}}">
+<link rel="canonical" href="{{seo.canonical}}">
+{{#if seo.noindex}}<meta name="robots" content="noindex">
+{{/if}}<meta property="og:type" content="article">
+<meta property="og:title" content="{{seo.title}}">
+<meta property="og:description" content="{{seo.description}}">
+<meta property="og:url" content="{{seo.canonical}}">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="{{site.faviconUrl}}" type="image/svg+xml">
+<link rel="alternate" type="application/rss+xml" title="{{site.name}}" href="{{site.feedUrl}}">
+{{#if site.hasPodcast}}<link rel="alternate" type="application/rss+xml" title="{{site.name}} podcast" href="{{site.podcastUrl}}">
+{{/if}}{{#each template.stylesheets}}<link rel="stylesheet" href="{{.}}">
+{{/each}}{{#each template.scripts}}<script src="{{.}}" defer></script>
+{{/each}}{{{seo.jsonLd}}}
+</head>
+<body>
+{{> masthead}}

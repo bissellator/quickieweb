@@ -1,0 +1,12 @@
+{
+  "//": "A static page. No date, no category, no feed entry.",
+  "type": "page",
+  "slug": "about",
+  "status": "draft",
+  "title": "About",
+  "dek": "",
+  "body": "<p>Standing content.</p>",
+
+  "//nav": "Put the page in the masthead. Omit or null to leave it reachable at its URL but unadvertised.",
+  "nav": { "label": "About", "order": 1 }
+}

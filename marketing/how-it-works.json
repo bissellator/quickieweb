@@ -1,0 +1,9 @@
+{
+  "type": "page",
+  "slug": "how-it-works",
+  "status": "published",
+  "title": "How it works",
+  "dek": "Two buckets, one CDN, and an editor that is asleep most of the time.",
+  "nav": { "label": "How it works", "order": 2 },
+  "body": "<p>Every site has two halves, and the split is the whole safety model.</p><h2>Staging</h2><p>Everything you are working on. Drafts, uploads, settings. It is private and it is not behind the CDN at all, so an unpublished post is not merely unlinked — it is unreachable.</p><h2>Live</h2><p>What the world sees. It is only ever written by a publish, which compares the two halves and moves what actually changed. Nothing else can write to it.</p><h2>Templates are data, not code</h2><p>A template is markup, a manifest and a stylesheet. Nothing in it executes. That is what makes it safe to render templates from a shared library, and it is why a template can be checked mechanically before it is ever published — a misspelled field is an error with a line number rather than a blank space on a page.</p><p>Whatever a template declares as adjustable becomes a form: colours, fonts, a logo. You are not editing CSS to change a heading colour, and you are not stuck when the template did not think of something — you can write your own.</p>"
+}

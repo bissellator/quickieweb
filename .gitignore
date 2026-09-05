@@ -1,0 +1,26 @@
+node_modules/
+site/
+.gstack/
+
+# YOUR installation's configuration: bucket names, distribution and hosted-zone
+# ids, the ACM ARN (which carries your AWS account number) and the Google client
+# id. None of that is secret exactly, but publishing it hands a stranger a map of
+# your infrastructure. Start from config.example.json.
+config.json
+
+# The editor is fetched, not committed. Two reasons: it is 2 MB of somebody
+# else's minified JavaScript, and it is GPL, which would make this Apache-2.0
+# repository ship a GPL binary. `npm run fetch-editor` vendors it locally, so the
+# console is still served entirely from your own bucket and never from a CDN.
+admin/ui/ckeditor.js
+admin/ui/ckeditor.css
+admin/ui/ckeditor-LICENSE.md
+
+# Lambda build artifacts. The zip is ~11 MB because of the linux sharp binary;
+# rebuild it with infra/build-lambda.mjs rather than committing it.
+infra/lambda-build/
+infra/*.zip
+
+# Generated from config.json by infra/deploy-admin-ui.mjs. Committing it would
+# put the Google client id in two places and let them drift.
+admin/ui/config.json

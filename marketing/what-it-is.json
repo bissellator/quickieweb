@@ -1,0 +1,9 @@
+{
+  "type": "page",
+  "slug": "what-it-is",
+  "status": "published",
+  "title": "What Quickieweb is",
+  "dek": "A publishing platform whose running cost, when nobody is reading, is zero.",
+  "nav": { "label": "What it is", "order": 1 },
+  "body": "<p>Most websites are a program that runs all day so that it can occasionally answer a question. You pay for the program to be awake. You pay again when it falls over, and again when somebody finds a hole in it.</p><p>Quickieweb publishes <strong>files</strong>. Your pages are rendered once, when you save them, and served from object storage behind a CDN. There is no server to keep awake, no database to back up, and no runtime for anyone to exploit. A page costs the same whether one person reads it or a hundred thousand do.</p><h2>What is actually running</h2><p>While a reader is on your site: nothing of ours. Static files, a CDN, and their browser.</p><p>While you are editing: one small function that wakes up, renders your site, writes the result, and goes back to sleep. It is idle the rest of the month.</p><h2>What you give up</h2><p>Comments, search and anything else that needs to think while a reader waits. That is a real trade and worth saying plainly rather than discovering later. If your site needs to run code for every visitor, this is the wrong tool and you should use a different one.</p>"
+}

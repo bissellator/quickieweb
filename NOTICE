@@ -1,0 +1,40 @@
+Quickieweb
+Copyright 2026 Quickieweb
+
+This product includes software developed as part of the Quickieweb project,
+licensed under the Apache License, Version 2.0. See LICENSE.
+
+--------------------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------------------
+
+CKEditor 5 — NOT bundled in this repository, fetched at install time
+  https://github.com/ckeditor/ckeditor5
+  Copyright (c) 2003-2026 CKSource Holding sp. z o.o.
+  Dual-licensed: GNU General Public License Version 2 or later, OR commercial
+  terms from CKSource.
+
+  `npm run fetch-editor` downloads CKEditor into admin/ui/ and configures it
+  with licenseKey "GPL". Those files are gitignored: an Apache-2.0 repository
+  should not ship a GPL binary, and an installer should meet that choice
+  knowingly rather than inherit it.
+
+  Consequence worth understanding before you distribute a build: the admin
+  console as deployed combines Apache-2.0 code with GPL code, and the GPL's
+  terms govern that combination. If that does not suit your situation, the
+  options are a commercial licence from CKSource or a permissively-licensed
+  editor. The coupling is deliberately small — create, getData, setData, one
+  change event and one image insertion — so substituting one is hours of work.
+
+  This is a description of the licences involved, not legal advice.
+
+DB-IP City Lite database — NOT bundled, fetched by infra/fetch-geodb.mjs
+  https://db-ip.com
+  Creative Commons Attribution 4.0 International (CC BY 4.0).
+  Attribution is displayed in the console's Stats tab, which is what CC BY
+  requires of anyone who uses it.
+
+Google Identity Services — loaded from accounts.google.com at runtime
+  https://developers.google.com/identity/gsi/web
+  Required for "Sign in with Google"; the token has to be minted by Google in
+  the browser. This is the one third-party script the console executes.

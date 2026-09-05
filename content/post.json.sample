@@ -1,0 +1,20 @@
+{
+  "//": "A post. Copy to content/<slug>.json and drop the .sample. The admin writes this same shape into the staging bucket.",
+  "type": "article",
+  "slug": "2026-01-01-example",
+  "date": "2026-01-01",
+  "status": "draft",
+  "title": "",
+  "dek": "",
+  "body": "<p>HTML. The admin writes this with CKEditor; by hand, plain HTML is fine.</p>",
+  "pullQuote": "",
+  "category": "NEWS",
+  "categoryLabel": "News",
+  "tags": [],
+
+  "//source": "Optional. Omit the whole object for a post that is not a response to something else.",
+  "source": { "label": "The story", "title": "", "url": "", "publisher": "", "figure": "", "discussionUrl": "" },
+
+  "//audio": "Set \"type\": \"podcast\" and fill this in for an episode. durationSeconds is measured by the browser at upload time.",
+  "audio": null
+}

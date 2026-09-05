@@ -1,0 +1,12 @@
+<header class="masthead">
+{{#if theme.logo}}  <a class="wordmark wordmark-logo" href="{{site.homeUrl}}"><img src="{{theme.logo}}" alt="{{site.name}}"></a>
+{{else}}  <a class="wordmark" href="{{site.homeUrl}}">{{site.name}}</a>
+{{/if}}{{#if theme.show_tagline}}{{#if site.tagline}}  <p class="masthead-tag">{{site.tagline}}</p>
+{{/if}}{{/if}}{{#if nav}}  <nav class="masthead-nav">
+{{#each nav}}    <a href="{{href}}"{{#if external}} rel="noopener"{{/if}}{{#if current}} aria-current="page"{{/if}}>{{label}}</a>
+{{/each}}  </nav>
+{{/if}}  <form class="site-search" data-qw-search hidden role="search">
+    <input type="search" data-qw-search-input placeholder="Search this site" aria-label="Search this site" autocomplete="off" spellcheck="false">
+    <div class="site-search-results" data-qw-search-results hidden></div>
+  </form>
+</header>

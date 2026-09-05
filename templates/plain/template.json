@@ -1,0 +1,109 @@
+{
+  "id": "plain",
+  "name": "Plain",
+  "version": "1.3.0",
+  "engine": "quickieweb-template@1",
+  "description": "One column, system fonts, no ornament. The smallest thing that reads well.",
+  "author": "Quickieweb",
+  "license": "MIT",
+  "supports": [
+    "article",
+    "podcast",
+    "page"
+  ],
+  "layouts": {
+    "index": "layouts/index.html",
+    "article": "layouts/article.html",
+    "page": "layouts/page.html",
+    "404": "layouts/404.html"
+  },
+  "partials": {
+    "head": "partials/head.html",
+    "footer": "partials/footer.html"
+  },
+  "styles": [
+    "assets/style.css"
+  ],
+  "tokens": {
+    "color.ink": {
+      "type": "color",
+      "default": "#1a1a1a",
+      "label": "Text",
+      "group": "Color"
+    },
+    "color.paper": {
+      "type": "color",
+      "default": "#ffffff",
+      "label": "Background",
+      "group": "Color"
+    },
+    "color.link": {
+      "type": "color",
+      "default": "#0b57d0",
+      "label": "Links",
+      "group": "Color"
+    },
+    "color.faint": {
+      "type": "color",
+      "default": "#6b6b6b",
+      "label": "Muted text",
+      "group": "Color"
+    },
+    "dark.color.ink": {
+      "type": "color",
+      "default": "#e6e6e6",
+      "label": "Text",
+      "group": "Color (dark mode)"
+    },
+    "dark.color.paper": {
+      "type": "color",
+      "default": "#16181c",
+      "label": "Background",
+      "group": "Color (dark mode)"
+    },
+    "dark.color.link": {
+      "type": "color",
+      "default": "#9cc4ff",
+      "label": "Links",
+      "group": "Color (dark mode)"
+    },
+    "dark.color.faint": {
+      "type": "color",
+      "default": "#9a9a9a",
+      "label": "Muted text",
+      "group": "Color (dark mode)"
+    },
+    "font.body": {
+      "type": "font",
+      "default": "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
+      "label": "Body font",
+      "group": "Type"
+    },
+    "layout.measure": {
+      "type": "select",
+      "default": "36rem",
+      "label": "Column width",
+      "group": "Layout",
+      "options": [
+        {
+          "value": "32rem",
+          "label": "Narrow"
+        },
+        {
+          "value": "36rem",
+          "label": "Standard"
+        },
+        {
+          "value": "44rem",
+          "label": "Wide"
+        }
+      ]
+    },
+    "logo": {
+      "type": "image",
+      "optional": true,
+      "label": "Masthead logo",
+      "group": "Branding"
+    }
+  }
+}

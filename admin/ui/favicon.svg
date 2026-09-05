@@ -1,0 +1,7 @@
+<!-- Placeholder mark. Replace this file; cli/build.mjs copies it to
+     site/assets/favicon.svg and to site/favicon.ico, and nothing else
+     references an icon. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="10" fill="#b3341f"/>
+  <circle cx="32" cy="32" r="13" fill="none" stroke="#f7f6f3" stroke-width="6"/>
+</svg>

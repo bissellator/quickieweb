@@ -1,0 +1,8 @@
+    <li class="row">
+      <time class="row-date" datetime="{{dateIso}}">{{dateDisplay}}</time>
+      <div class="row-main">
+        <a class="row-title" href="{{url}}">{{title}}</a>
+{{#if theme.show_dek}}{{#if dek}}        <p class="row-dek">{{dek}}</p>
+{{/if}}{{/if}}      </div>
+      <span class="row-tag">{{#if categoryLabel}}{{categoryLabel}}{{/if}}{{#if isPodcast}} audio{{/if}}</span>
+    </li>

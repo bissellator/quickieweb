@@ -1,0 +1,35 @@
+{{> head}}
+<main class="wrap">
+<article class="article">
+  <div class="article-kicker">
+{{#if post.categoryLabel}}    <span class="tag tag-{{post.categorySlug}}">{{post.categoryLabel}}</span>
+{{/if}}    <time datetime="{{post.dateIso}}">{{post.dateDisplay}}</time>
+{{#if post.isPodcast}}    <span class="tag tag-audio">Audio</span>
+{{/if}}  </div>
+
+  <h1 class="article-title">{{post.title}}</h1>
+{{#if post.dek}}  <p class="article-dek">{{post.dek}}</p>
+{{/if}}
+{{#if post.audio}}  <aside class="audio-card">
+    <p class="audio-label">Listen{{#if post.audio.duration}} &middot; {{post.audio.duration}}{{/if}}</p>
+    <audio class="audio-player" controls preload="none" src="{{post.audio.url}}">
+      <a href="{{post.audio.url}}">Download the audio</a>
+    </audio>
+  </aside>
+{{/if}}
+{{#if post.source}}  <aside class="source-card">
+    <p class="source-label">{{post.source.label}}</p>
+    <p class="source-title">{{#if post.source.url}}<a href="{{post.source.url}}" rel="noopener nofollow">{{post.source.title}}</a>{{else}}{{post.source.title}}{{/if}}</p>
+{{#if post.source.publisher}}    <p class="source-meta">{{post.source.publisher}}{{#if post.source.figure}} &middot; <strong>{{post.source.figure}}</strong>{{/if}}{{#if post.source.discussionUrl}} &middot; <a href="{{post.source.discussionUrl}}" rel="noopener nofollow">discussion</a>{{/if}}</p>
+{{/if}}  </aside>
+{{/if}}
+  <div class="article-body">
+{{{post.bodyHtml}}}
+  </div>
+{{#if post.pullQuote}}
+  <blockquote class="pull">{{post.pullQuote}}</blockquote>
+{{/if}}{{#if post.tags}}
+  <p class="tags">{{#each post.tags}}<span class="tag-chip">{{.}}</span> {{/each}}</p>
+{{/if}}</article>
+</main>
+{{> footer}}

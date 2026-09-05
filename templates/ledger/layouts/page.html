@@ -1,0 +1,11 @@
+{{> head}}
+<article class="piece">
+  <h1>{{page.title}}</h1>
+{{#if page.dek}}  <p class="dek">{{page.dek}}</p>
+{{/if}}
+  <div class="body">
+{{{page.bodyHtml}}}
+  </div>
+{{#if page.updatedDisplay}}  <p class="meta">Last updated {{page.updatedDisplay}}</p>
+{{/if}}</article>
+{{> foot}}

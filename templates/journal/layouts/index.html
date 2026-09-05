@@ -1,0 +1,11 @@
+{{> head}}
+<main class="wrap">
+{{#if site.description}}  <section class="lede">
+    <h1>{{site.description}}</h1>
+{{#if site.tagline}}    <p>{{site.tagline}}</p>
+{{/if}}  </section>
+{{/if}}{{#if posts}}  <ul class="cards">
+{{#each posts}}{{> card}}{{/each}}  </ul>
+{{else}}  <p class="empty">Nothing published yet.</p>
+{{/if}}</main>
+{{> footer}}

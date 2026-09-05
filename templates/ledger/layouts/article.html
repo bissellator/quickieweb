@@ -1,0 +1,15 @@
+{{> head}}
+<article class="piece">
+  <p class="meta"><time datetime="{{post.dateIso}}">{{post.dateDisplay}}</time>{{#if post.categoryLabel}} &middot; {{post.categoryLabel}}{{/if}}</p>
+  <h1>{{post.title}}</h1>
+{{#if post.dek}}  <p class="dek">{{post.dek}}</p>
+{{/if}}{{#if post.audio}}  <audio controls preload="none" src="{{post.audio.url}}"><a href="{{post.audio.url}}">Download the audio</a></audio>
+{{/if}}{{#if post.source}}  <p class="source">{{post.source.label}}: {{#if post.source.url}}<a href="{{post.source.url}}" rel="noopener nofollow">{{post.source.title}}</a>{{else}}{{post.source.title}}{{/if}}{{#if post.source.publisher}} &middot; {{post.source.publisher}}{{/if}}{{#if post.source.figure}} &middot; <strong>{{post.source.figure}}</strong>{{/if}}</p>
+{{/if}}
+  <div class="body">
+{{{post.bodyHtml}}}
+  </div>
+{{#if post.pullQuote}}  <blockquote>{{post.pullQuote}}</blockquote>
+{{/if}}{{#if post.tags}}  <p class="tags">{{#each post.tags}}<span>{{.}}</span>{{/each}}</p>
+{{/if}}</article>
+{{> foot}}
