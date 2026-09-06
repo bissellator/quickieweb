@@ -50,7 +50,7 @@ Layout and partial filenames are yours; the manifest maps names to paths.
   "description": "One line for the library listing.",
   "author": "You",
   "license": "MIT",
-  "supports": ["article", "podcast", "page"],
+  "supports": ["article", "podcast", "gallery", "page"],
 
   "layouts": {
     "index": "layouts/index.html",
@@ -149,6 +149,11 @@ Nothing beyond the common roots.
 |---|---|
 | `post` | `post` |
 
+**`gallery`** (optional)
+| Path | Type |
+|---|---|
+| `post` | `post` |
+
 **`page`** (required)
 | Path | Type |
 |---|---|
@@ -164,7 +169,7 @@ Nothing beyond the common roots.
 | `posts` | `post[]` |
 
 Required layouts: `index`, `article`, `page`, `404`.
-Optional layouts: `archive`, `tag`.
+Optional layouts: `archive`, `tag`, `gallery`.
 
 ### Shapes
 
@@ -238,8 +243,11 @@ Optional layouts: `archive`, `tag`.
 | `pullQuote` | `string` |
 | `tags` | `string[]` |
 | `isPodcast` | `boolean` |
+| `isGallery` | `boolean` |
 | `source` | `source\|null` |
 | `audio` | `audio\|null` |
+| `images` | `image[]` |
+| `cover` | `image\|null` |
 | `seo` | `seo` |
 
 **`page`**
@@ -267,6 +275,17 @@ Optional layouts: `archive`, `tag`.
 | `publisher` | `string` |
 | `figure` | `string` |
 | `discussionUrl` | `string` |
+
+**`image`**
+
+| Field | Type |
+|---|---|
+| `url` | `string` |
+| `absUrl` | `string` |
+| `alt` | `string` |
+| `caption` | `string` |
+| `width` | `number` |
+| `height` | `number` |
 
 **`audio`**
 
@@ -418,8 +437,48 @@ lists everything, and `?q=` in the URL so a search is shareable.
 | The whole package renders a fixture | Catches what static checks miss: self-including partials, a layout that never opens `<html>`. |
 
 The fixture is deliberately awkward — a post with every field, a post with
-nothing optional, a podcast episode, and a page. If your template renders all
-four, it renders any real site.
+nothing optional, a podcast episode, a gallery, and a page. If your template
+renders all five, it renders any real site.
+
+---
+
+## Galleries
+
+A `gallery` is a dated post that carries an image set: the same shape a
+`podcast` has, with pictures instead of an audio file. Images are authored
+inline in the body and split out into `post.images` when the record is saved, so
+`post.bodyHtml` is the prose that was around them.
+
+Render the grid yourself and let the platform handle the viewer:
+
+```html
+{{#if post.images}}  <div class="gallery" data-qw-gallery>
+{{#each post.images}}    <figure class="gallery-item" data-qw-gallery-item>
+      <img src="{{url}}" alt="{{alt}}" loading="lazy"{{#if width}} width="{{width}}"{{/if}}{{#if height}} height="{{height}}"{{/if}}>
+{{#if caption}}      <figcaption>{{caption}}</figcaption>
+{{/if}}    </figure>
+{{/each}}  </div>
+{{/if}}
+```
+
+`assets/gallery.js` is emitted for every site and linked through
+`{{#each template.scripts}}`, exactly like search. It finds those two
+attributes, reads the `src`, `alt` and `<figcaption>` back out of your markup,
+and opens a lightbox on click with keyboard, swipe and wrap-around paging. There
+is no manifest to fetch and nothing to keep in sync; with JavaScript off, the
+grid is still a grid of real images.
+
+You style the grid. The overlay ships its own CSS, because a modal image viewer
+is not a thing each template should have to reimplement, and you can retune it
+through `--qw-lb-backdrop` and `--qw-lb-ink`.
+
+Two more fields are yours if you want them: `post.isGallery` for a chip beside
+the date, and `post.cover` (the first image, or `null`) for a thumbnail on an
+index card.
+
+A gallery renders through your `article` layout. Declare an optional `gallery`
+layout only if you want it to look different — there is no obligation, and
+`supports` is what says you handle the type at all.
 
 ---
 

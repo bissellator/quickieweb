@@ -188,6 +188,7 @@ code{font-family:var(--mono);font-size:.88em}
   .token > .muted { grid-column: 1; }
 }
 .pill.page { background: #5b3a8e; color: #fff; }
+.pill.images { background: #1b6b57; color: #fff; }
 
 /* ------------------------------------------------------- site switcher */
 .siteswitch { display: flex; align-items: center; gap: .5rem; margin-left: 1rem; }

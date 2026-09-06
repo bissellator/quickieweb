@@ -5,6 +5,7 @@
 {{#if post.categoryLabel}}    <span class="tag tag-{{post.categorySlug}}">{{post.categoryLabel}}</span>
 {{/if}}    <time datetime="{{post.dateIso}}">{{post.dateDisplay}}</time>
 {{#if post.isPodcast}}    <span class="tag tag-audio">Audio</span>
+{{/if}}{{#if post.isGallery}}    <span class="tag tag-images">Images</span>
 {{/if}}  </div>
 
   <h1 class="article-title">{{post.title}}</h1>
@@ -26,6 +27,13 @@
   <div class="article-body">
 {{{post.bodyHtml}}}
   </div>
+{{#if post.images}}  <div class="gallery" data-qw-gallery>
+{{#each post.images}}    <figure class="gallery-item" data-qw-gallery-item>
+      <img src="{{url}}" alt="{{alt}}" loading="lazy"{{#if width}} width="{{width}}"{{/if}}{{#if height}} height="{{height}}"{{/if}}>
+{{#if caption}}      <figcaption>{{caption}}</figcaption>
+{{/if}}    </figure>
+{{/each}}  </div>
+{{/if}}
 {{#if post.pullQuote}}
   <blockquote class="pull">{{post.pullQuote}}</blockquote>
 {{/if}}{{#if post.tags}}

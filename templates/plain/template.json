@@ -1,7 +1,7 @@
 {
   "id": "plain",
   "name": "Plain",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "engine": "quickieweb-template@1",
   "description": "One column, system fonts, no ornament. The smallest thing that reads well.",
   "author": "Quickieweb",
@@ -9,6 +9,7 @@
   "supports": [
     "article",
     "podcast",
+    "gallery",
     "page"
   ],
   "layouts": {

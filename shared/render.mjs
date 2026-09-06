@@ -18,6 +18,7 @@ import {
 } from "./template/viewmodel.mjs";
 import { isDated, publishedOnly, sortContent } from "./content.mjs";
 import { buildSearchIndex, CLIENT_SOURCE } from "./search.mjs";
+import { CLIENT_SOURCE as GALLERY_CLIENT } from "./gallery.mjs";
 
 export class RenderError extends Error {
   constructor(message) { super(message); this.name = "RenderError"; }
@@ -74,7 +75,13 @@ export function renderSite({ template, site, theme = {}, records = [], base = ""
     });
   };
 
-  for (const post of posts) draw("article", `${post.slug}.html`, { post, seo: post.seo }, post.url);
+  // A gallery renders through the `article` layout unless the template offers a
+  // dedicated one, which is how `podcast` has always worked: declaring support
+  // for a type is a manifest concern, having a separate layout for it is taste.
+  // Requiring a `gallery` layout instead would invalidate every template ever
+  // written against this engine, to no reader's benefit.
+  const layoutFor = (post) => (post.isGallery && template.layouts.gallery ? "gallery" : "article");
+  for (const post of posts) draw(layoutFor(post), `${post.slug}.html`, { post, seo: post.seo }, post.url);
   for (const page of pages) draw("page", `${page.slug}.html`, { page, seo: page.seo }, page.url);
 
   draw("index", "index.html", {
@@ -136,6 +143,14 @@ export function renderSite({ template, site, theme = {}, records = [], base = ""
   // the styling. Exactly the split design tokens use.
   files["search-index.json"] = JSON.stringify(buildSearchIndex([...posts, ...pages]));
   files["assets/search.js"] = CLIENT_SOURCE;
+
+  // ---- galleries
+  //
+  // Emitted unconditionally, for the same reason and on the same terms as
+  // search: it does nothing on a page with no [data-qw-gallery] in it, and
+  // making the file set depend on what happens to be published means a site
+  // gains and loses files as posts come and go.
+  files["assets/gallery.js"] = GALLERY_CLIENT;
   files["feed.xml"] = feedXml(site, posts);
   const pod = podcastXml(site, posts);
   if (pod) files["podcast.xml"] = pod;

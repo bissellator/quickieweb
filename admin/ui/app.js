@@ -231,6 +231,7 @@ async function loadArticles() {
         <div>
           <span class="pill ${esc(a.status)}">${esc(a.status)}</span>
           ${a.type === "podcast" ? '<span class="pill audio">audio</span>' : ""}
+          ${a.type === "gallery" ? '<span class="pill images">gallery</span>' : ""}
           ${a.type === "page" ? '<span class="pill page">page</span>' : ""}
           <strong>${esc(a.title)}</strong>
           <div class="muted small">${meta}</div>
@@ -380,10 +381,23 @@ async function ensureEditor() {
   return editor;
 }
 
+/** A gallery record as one editable document: prose first, then its pictures. */
+function withImages(a) {
+  const body = a?.body ?? "";
+  if (a?.type !== "gallery" || !a?.images?.length) return body;
+  const tags = a.images.map((i) =>
+    `<p><img src="${esc(i.url)}" alt="${esc(i.alt)}"`
+    + (i.caption ? ` title="${esc(i.caption)}"` : "")
+    + (i.width ? ` width="${i.width}"` : "")
+    + (i.height ? ` height="${i.height}"` : "")
+    + "></p>").join("");
+  return body + tags;
+}
+
 async function openEditor(a) {
   editing = a;
   err($("editErr"), null);
-  const TYPE_LABEL = { article: "post", podcast: "episode", page: "page" };
+  const TYPE_LABEL = { article: "post", podcast: "episode", gallery: "gallery", page: "page" };
   const type = a?.type ?? "article";
   $("editorTitle").textContent = `${a ? "Edit" : "New"} ${TYPE_LABEL[type] ?? "post"}`;
 
@@ -405,12 +419,21 @@ async function openEditor(a) {
   $("f-nav-label").value = a?.nav?.label ?? "";
   $("f-nav-order").value = a?.nav?.order ?? 0;
   $("f-audiourl").value = a?.audio?.url ?? "";
+  $("galleryMeta").textContent = a?.images?.length
+    ? `${a.images.length} image${a.images.length === 1 ? "" : "s"}, taken from the body. `
+      + "Add, remove or reorder them there; a caption is the image's title text."
+    : "Insert images into the body. They are split out into a grid when you save.";
   $("audioMeta").textContent = a?.audio
     ? `${a.audio.mimeType ?? ""} ${a.audio.byteLength ?? 0} bytes${a.audio.durationSeconds ? `, ${Math.round(a.audio.durationSeconds)}s` : ""}`
     : "";
 
   const ed = await ensureEditor();
-  ed.setData(a?.body ?? "");
+  // A gallery is stored split -- prose in `body`, pictures in `images` -- but it
+  // is AUTHORED as one document. Putting the images back means the editor shows
+  // what the page will show, in the order the page will show it, and saving
+  // splits them out again. Without this, opening a saved gallery would present
+  // an author with their captions gone and a body that looks half-deleted.
+  ed.setData(withImages(a));
   $("wordCount").textContent = `${countWords(ed.getData())} words`;
 
   dirty = false;
@@ -429,6 +452,7 @@ function toggleType() {
   const type = $("f-template").value;
   const isPage = type === "page";
   show($("audioFields"), type === "podcast");
+  show($("galleryFields"), type === "gallery");
   show($("navFields"), isPage);
   show($("dateField"), !isPage);
   show($("categoryField"), !isPage);
@@ -540,6 +564,13 @@ $("saveArticle").addEventListener("click", async () => {
   }
   if (payload.status === "published" && !payload.body.trim()) {
     return err($("editErr"), "A published article needs a body.");
+  }
+  // The body check above passes for a gallery of pictures and no prose, because
+  // at this point the pictures are still IN the body -- they are split out on
+  // the server. So the thing left to check is that there are any.
+  if (type === "gallery" && payload.status === "published"
+      && !payload.body.toLowerCase().includes("<img")) {
+    return err($("editErr"), "A published gallery needs at least one image in the body.");
   }
 
   const btn = $("saveArticle");

@@ -1,8 +1,29 @@
 <!doctype html>
+{{! No build timestamp in the banner below, deliberately. Publishing compares
+    staging against live by ETag and copies only what differs; a timestamp on
+    every page would make every page differ on every rebuild, so each publish
+    would recopy the whole site and invalidate every path in the CDN. Anything
+    put in that comment must be stable across a rebuild that changed nothing. }}<!--
+  Published with Quickieweb - https://quickieweb.com
+
+  This page was rendered once, when it was saved, and is served as a file from
+  object storage behind a CDN. There is no server on the read path, no database
+  and no tracking script; it costs the publisher the same whether one person
+  reads it or a hundred thousand do.
+
+  template  {{template.name}} {{template.version}}
+  engine    quickieweb-template@1
+  source    https://github.com/bissellator/quickieweb  (Apache-2.0)
+
+  Templates here are data, not code: no expressions, no helpers, nothing that
+  executes. Run the whole thing on your own AWS account, or use the hosted
+  version at quickieweb.com.
+-->
 <html lang="{{site.lang}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="{{build.generator}}">
 <title>{{seo.title}}</title>
 <meta name="description" content="{{seo.description}}">
 <link rel="canonical" href="{{seo.canonical}}">

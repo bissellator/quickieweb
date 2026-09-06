@@ -7,6 +7,7 @@
 
 import { compile, TemplateError } from "./engine.mjs";
 import { TOKEN_TYPES } from "./tokens.mjs";
+import { CONTENT_TYPES } from "../content.mjs";
 
 export const ENGINE = "quickieweb-template@1";
 
@@ -14,9 +15,13 @@ export const ENGINE = "quickieweb-template@1";
 // the list because static pages are a platform feature, not a template's choice:
 // a site that switches templates must not lose its About page.
 export const REQUIRED_LAYOUTS = ["index", "article", "page", "404"];
-export const OPTIONAL_LAYOUTS = ["archive", "tag"];
+export const OPTIONAL_LAYOUTS = ["archive", "tag", "gallery"];
 
-export const CONTENT_TYPES = ["article", "podcast", "page"];
+// Re-exported, not redeclared. A second copy of this list lived here and had
+// already drifted -- it still said article/podcast/page after `gallery` was a
+// content type, so every template declaring support for one failed to validate
+// with a message naming a list the platform no longer used.
+export { CONTENT_TYPES };
 
 // Shapes a partial may declare itself rendered against. "post" and "page" cover
 // the two loops that matter; null means "the layout's own roots".

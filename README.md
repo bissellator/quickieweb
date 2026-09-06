@@ -34,6 +34,9 @@ being worth running.
   free.
 - **Static pages** alongside dated posts. An About page can put itself in the
   masthead without editing config.
+- **Photo galleries** as a post type. Drop images into the editor and they come
+  out as a responsive grid with a lightbox — keyboard, swipe, captions — that
+  the platform supplies, so no template has to ship JavaScript to get one.
 - **Client-side search over full body text.** The index is fetched on the first
   interaction with the search box and never on page load, so a reader who does
   not search pays nothing for the feature existing.
@@ -175,7 +178,8 @@ and `plain` (minimal).
 config.json              your installation. Gitignored; start from config.example.json
 shared/                  pure — no filesystem, no S3, no network
   render.mjs             content + template -> the complete set of files a site is made of
-  content.mjs            the content model: article, podcast, page
+  gallery.mjs            the lightbox, emitted as assets/gallery.js
+  content.mjs            the content model: article, podcast, gallery, page
   site.mjs               sites, membership, storage drivers, tenant key isolation
   search.mjs             the search index, and the client that queries it
   template/              the engine, manifest, design tokens, view model, validator

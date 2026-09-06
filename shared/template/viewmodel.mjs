@@ -29,7 +29,10 @@ export const SHAPES = {
     date: "string", dateDisplay: "string", dateIso: "string",
     category: "string", categorySlug: "string", categoryLabel: "string",
     bodyHtml: "string", pullQuote: "string", tags: "string[]",
-    isPodcast: "boolean", source: "source|null", audio: "audio|null", seo: "seo",
+    isPodcast: "boolean", isGallery: "boolean",
+    source: "source|null", audio: "audio|null",
+    images: "image[]", cover: "image|null",
+    seo: "seo",
   },
   page: {
     type: "string", slug: "string", url: "string", absUrl: "string",
@@ -39,6 +42,12 @@ export const SHAPES = {
   source: {
     label: "string", title: "string", url: "string",
     publisher: "string", figure: "string", discussionUrl: "string",
+  },
+  image: {
+    url: "string", absUrl: "string", alt: "string", caption: "string",
+    // 0 when unknown. A template writing width/height only when they are
+    // truthy reserves the box and stops the grid reflowing as images load.
+    width: "number", height: "number",
   },
   audio: {
     url: "string", absUrl: "string", mimeType: "string",
@@ -59,6 +68,7 @@ export const COMMON_ROOTS = {
 export const LAYOUT_ROOTS = {
   index: {},
   article: { post: "post" },
+  gallery: { post: "post" },
   page: { page: "page" },
   "404": {},
   archive: {},
@@ -241,6 +251,14 @@ export function websiteJsonLd(site) {
 
 export function projectPost(record, site, base = "") {
   const url = linkTo(pathFor(record), base);
+  const images = (record.images ?? []).map((i) => ({
+    url: linkTo(i.url, base),
+    absUrl: absUrl(site.baseUrl, i.url),
+    alt: i.alt ?? "",
+    caption: i.caption ?? "",
+    width: i.width ?? 0,
+    height: i.height ?? 0,
+  }));
   return {
     type: record.type,
     slug: record.slug,
@@ -261,6 +279,10 @@ export function projectPost(record, site, base = "") {
     pullQuote: record.pullQuote ?? "",
     tags: record.tags ?? [],
     isPodcast: record.type === "podcast",
+    isGallery: record.type === "gallery",
+    images: images,
+    // The first image stands in for the post: a card thumbnail, an og:image.
+    cover: images[0] ?? null,
     source: record.source ?? null,
     audio: record.audio
       ? {
@@ -274,13 +296,16 @@ export function projectPost(record, site, base = "") {
       : null,
     seo: projectSeo(record, site, url, {
       "@context": "https://schema.org",
-      "@type": record.type === "podcast" ? "PodcastEpisode" : "NewsArticle",
+      "@type": record.type === "podcast" ? "PodcastEpisode"
+        : record.type === "gallery" ? "ImageGallery"
+        : "NewsArticle",
       headline: record.title,
       description: record.dek,
       datePublished: record.date,
       ...(site.author ? { author: { "@type": "Person", name: site.author, url: site.authorUrl || undefined } } : {}),
       publisher: { "@type": "Organization", name: site.name },
       mainEntityOfPage: absUrl(site.baseUrl, url),
+      ...(images.length ? { image: images.map((i) => i.absUrl) } : {}),
       ...(record.audio?.url
         ? { associatedMedia: { "@type": "MediaObject", contentUrl: absUrl(site.baseUrl, record.audio.url) } }
         : {}),
@@ -378,12 +403,13 @@ export function buildViewModel({ site, template, theme, posts, pages, nav = [], 
       version: template.manifest.version,
       stylesheets: ["assets/theme.css", ...(template.manifest.styles ?? []).map((s) => `assets/${s.split("/").pop()}`)]
         .map((u) => linkTo(u, base)),
-      // search.js is prepended by the platform, not declared by the template.
-      // A template renders {{#each template.scripts}} and gets search behaviour
-      // without shipping any JavaScript of its own -- which matters because the
-      // validator forbids templates from carrying <script> at all.
+      // search.js and gallery.js are prepended by the platform, not declared by
+      // the template. A template renders {{#each template.scripts}} and gets both
+      // behaviours without shipping any JavaScript of its own -- which matters
+      // because the validator forbids templates from carrying <script> at all.
       scripts: [
         linkTo("assets/search.js", base),
+        linkTo("assets/gallery.js", base),
         ...(template.manifest.scripts ?? []).map((s) => linkTo(`assets/${s.split("/").pop()}`, base)),
       ],
     },

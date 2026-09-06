@@ -9,6 +9,13 @@
   <div class="body">
 {{{post.bodyHtml}}}
   </div>
+{{#if post.images}}  <div class="gallery" data-qw-gallery>
+{{#each post.images}}    <figure class="gallery-item" data-qw-gallery-item>
+      <img src="{{url}}" alt="{{alt}}" loading="lazy"{{#if width}} width="{{width}}"{{/if}}{{#if height}} height="{{height}}"{{/if}}>
+{{#if caption}}      <figcaption>{{caption}}</figcaption>
+{{/if}}    </figure>
+{{/each}}  </div>
+{{/if}}
 {{#if post.pullQuote}}  <blockquote>{{post.pullQuote}}</blockquote>
 {{/if}}{{#if post.tags}}  <p class="tags">{{#each post.tags}}<span>{{.}}</span>{{/each}}</p>
 {{/if}}</article>

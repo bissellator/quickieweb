@@ -184,7 +184,7 @@ export function validateTemplate(sources) {
 
 // ------------------------------------------------------------------ fixture
 // Deliberately awkward: a post with everything, a post with nothing, a podcast,
-// and a page. A template that renders all four renders any real site.
+// a gallery, and a page. A template that renders all five renders any real site.
 export const FIXTURE_SITE = {
   name: "Fixture Site", shortName: "Fixture", tagline: "A tagline",
   description: "A site used to smoke-test templates.",
@@ -212,6 +212,14 @@ export const FIXTURE_RECORDS = [
     type: "podcast", slug: "2026-01-03-ep", date: "2026-01-03", status: "published",
     title: "An episode", dek: "With audio.", body: "<p>Show notes.</p>",
     audio: { url: "/media/audio/ep.mp3", mimeType: "audio/mpeg", byteLength: 1234, durationSeconds: 3725 },
+  }),
+  normalizeContent({
+    type: "gallery", slug: "2026-01-04-shots", date: "2026-01-04", status: "published",
+    title: "A gallery", dek: "With pictures.",
+    // Authored the way a gallery is authored: prose and pictures in one body,
+    // split apart by normalizeContent. One image carries dimensions and a
+    // caption, one carries neither, because a template must handle both.
+    body: '<p>Some prose.</p><p><img src="/media/1.jpg" alt="First" title="A caption" width="800" height="600"></p><img src="/media/2.jpg">',
   }),
   normalizeContent({
     type: "page", slug: "about", status: "published",

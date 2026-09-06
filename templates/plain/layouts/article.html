@@ -6,6 +6,13 @@
 {{/if}}{{#if post.audio}}  <audio controls preload="none" src="{{post.audio.url}}"><a href="{{post.audio.url}}">Download the audio</a></audio>
 {{/if}}{{#if post.source}}  <p class="meta">{{post.source.label}}: {{#if post.source.url}}<a href="{{post.source.url}}" rel="noopener nofollow">{{post.source.title}}</a>{{else}}{{post.source.title}}{{/if}}{{#if post.source.publisher}} ({{post.source.publisher}}){{/if}}</p>
 {{/if}}{{{post.bodyHtml}}}
+{{#if post.images}}  <div class="gallery" data-qw-gallery>
+{{#each post.images}}    <figure class="gallery-item" data-qw-gallery-item>
+      <img src="{{url}}" alt="{{alt}}" loading="lazy"{{#if width}} width="{{width}}"{{/if}}{{#if height}} height="{{height}}"{{/if}}>
+{{#if caption}}      <figcaption>{{caption}}</figcaption>
+{{/if}}    </figure>
+{{/each}}  </div>
+{{/if}}
 {{#if post.pullQuote}}  <blockquote>{{post.pullQuote}}</blockquote>
 {{/if}}</article>
 {{> footer}}

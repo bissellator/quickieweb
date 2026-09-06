@@ -91,6 +91,7 @@
           <select id="f-template">
             <option value="article">post</option>
             <option value="podcast">audio / podcast</option>
+            <option value="gallery">photo gallery</option>
             <option value="page">static page</option>
           </select>
         </label>
@@ -121,6 +122,14 @@
         </div>
         <div id="f-body"></div>
       </div>
+
+      <!-- Galleries only. Images are authored in the body like any other post
+           and split out on save, which is the whole affordance: there is no
+           second place to manage them. This says what happened to them. -->
+      <fieldset id="galleryFields" hidden>
+        <legend>Gallery</legend>
+        <p class="muted small" id="galleryMeta"></p>
+      </fieldset>
 
       <fieldset id="audioFields" hidden>
         <legend>Audio</legend>

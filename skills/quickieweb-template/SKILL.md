@@ -98,6 +98,45 @@ Keep `hidden` on the form — the script removes it, so a reader without
 JavaScript never sees a dead control. Style `.qw-s-hit` (plus `.is-active`),
 `.qw-s-title`, `.qw-s-meta`, `.qw-s-dek`, `.qw-s-msg` and `<mark>`.
 
+The same list is how a template gets a **gallery lightbox**. A `gallery` post
+is a dated post carrying `post.images`; you render the grid, the platform
+renders the viewer:
+
+```handlebars
+{{#if post.images}}  <div class="gallery" data-qw-gallery>
+{{#each post.images}}    <figure class="gallery-item" data-qw-gallery-item>
+      <img src="{{url}}" alt="{{alt}}" loading="lazy"{{#if width}} width="{{width}}"{{/if}}{{#if height}} height="{{height}}"{{/if}}>
+{{#if caption}}      <figcaption>{{caption}}</figcaption>
+{{/if}}    </figure>
+{{/each}}  </div>
+{{/if}}
+```
+
+Put that in your `article` layout and list `"gallery"` in `supports`. The
+script reads `src`, `alt` and the `<figcaption>` back out of that markup, so
+there is nothing else to declare. Style the grid; the overlay styles itself and
+takes `--qw-lb-backdrop` and `--qw-lb-ink` if you want to retune it.
+
+`post.isGallery` is there for a chip beside the date, and `post.cover` is the
+first image (or `null`) for a thumbnail on an index card. A dedicated `gallery`
+layout is optional — without one, galleries render through `article`.
+
+## The banner and the credit
+
+Every bundled template opens its head partial with an HTML comment naming
+Quickieweb, what a flat-stack page is, and `{{template.name}}
+{{template.version}}`, and carries a "Published with Quickieweb" line in the
+footer. Copy both when you write one.
+
+Put nothing in that banner that changes when the content did not — a build
+timestamp above all. Publishing compares staging against live by ETag and copies
+only what differs; a per-render value on every page makes every page differ on
+every rebuild, so each publish recopies the whole site and invalidates every
+path in the CDN.
+
+`<a href>` to an external site is fine. The self-contained rule below is about
+assets — things the browser fetches on its own.
+
 **No external URLs for assets.** No Google Fonts, no CDN stylesheets, no
 remote images. Ship the file in the package. A third-party request is a
 dependency that can break a customer's site without anyone touching it.

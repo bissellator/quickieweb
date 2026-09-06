@@ -4,8 +4,10 @@
 {{#if categoryLabel}}        <span class="tag tag-{{categorySlug}}">{{categoryLabel}}</span>
 {{/if}}        <time datetime="{{dateIso}}">{{dateDisplay}}</time>
 {{#if isPodcast}}        <span class="tag tag-audio">Audio</span>
+{{/if}}{{#if isGallery}}        <span class="tag tag-images">Images</span>
 {{/if}}      </div>
-      <h2 class="card-title">{{title}}</h2>
+{{#if cover}}      <img class="card-cover" src="{{cover.url}}" alt="{{cover.alt}}" loading="lazy">
+{{/if}}      <h2 class="card-title">{{title}}</h2>
 {{#if dek}}      <p class="card-dek">{{dek}}</p>
 {{/if}}{{#if source.publisher}}      <p class="card-source">re: {{source.publisher}}</p>
 {{/if}}    </a>

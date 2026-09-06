@@ -88,3 +88,15 @@ pre code {
   font-size: .88em; background: rgba(127,127,127,.14);
   border-radius: 3px; padding: .08em .3em;
 }
+
+/* -------------------------------------------------------------- gallery */
+.gallery {
+  display: grid; gap: .5rem; margin: 1.5rem 0;
+  grid-template-columns: repeat(auto-fill, minmax(min(140px, 100%), 1fr));
+}
+.gallery-item { margin: 0; }
+.gallery-item img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; }
+.gallery-item figcaption { font-size: .78rem; color: var(--color-faint); padding-top: .3rem; }
+
+.bottom .credit { margin: .3rem 0 0; color: var(--color-faint); font-size: .82rem; }
+.bottom .credit a { color: inherit; }

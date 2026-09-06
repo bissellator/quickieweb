@@ -6,6 +6,7 @@
 //
 //   article   a dated post
 //   podcast   a dated post with an audio enclosure
+//   gallery   a dated post with an image set
 //   page      an undated standing page (About, Contact, Colophon)
 //
 // Pages are a platform feature rather than a template's choice. A site that
@@ -15,11 +16,11 @@
 // Pure: no filesystem, no S3, no network. Both the admin and the CLI normalize
 // through here so a record written by one is readable by the other.
 
-export const CONTENT_TYPES = ["article", "podcast", "page"];
+export const CONTENT_TYPES = ["article", "podcast", "gallery", "page"];
 export const STATUSES = ["draft", "published"];
 
 /** Dated types appear in the index and the feeds. Pages do not. */
-export const isDated = (type) => type === "article" || type === "podcast";
+export const isDated = (type) => type !== "page";
 
 export const slugify = (s) =>
   String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 70);
@@ -56,6 +57,58 @@ function normalizeAudio(raw) {
   };
 }
 
+function normalizeImages(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((i) => (typeof i === "string" ? { url: i } : i))
+    .filter((i) => i && typeof i === "object")
+    .map((i) => ({
+      url: str(i.url),
+      alt: str(i.alt),
+      caption: str(i.caption),
+      // Zero means unknown. Emitting width/height when they ARE known lets a
+      // template reserve the box and stops the grid reflowing as images arrive.
+      width: Number(i.width) || 0,
+      height: Number(i.height) || 0,
+    }))
+    .filter((i) => i.url);
+}
+
+const IMG_RE = /<img\b[^>]*>/gi;
+const attr = (tag, name) =>
+  (tag.match(new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)')`, "i")) ?? [])
+    .slice(2).find((v) => v !== undefined) ?? "";
+
+/**
+ * Pull <img> tags out of editor HTML into an image list, and return the prose
+ * that is left. This is how a gallery is authored: images are pasted into the
+ * body like any other post, and the grid is assembled from them.
+ *
+ * Done once here rather than at render time. The alternative -- regexing user
+ * HTML on every render, in one process serving many tenants -- is the shape of
+ * thing that eventually goes wrong on somebody else's content.
+ */
+export function extractImages(html = "") {
+  const images = [];
+  const body = String(html).replace(IMG_RE, (tag) => {
+    const url = attr(tag, "src");
+    if (!url) return "";
+    images.push({
+      url,
+      alt: attr(tag, "alt"),
+      caption: attr(tag, "title"),
+      width: Number(attr(tag, "width")) || 0,
+      height: Number(attr(tag, "height")) || 0,
+    });
+    return "";
+  });
+  // An <img> alone in a <p> or <figure> leaves an empty shell behind it.
+  const prose = body
+    .replace(/<(p|figure|div)\b[^>]*>(?:\s|&nbsp;|<br\s*\/?>)*<\/\1\s*>/gi, "")
+    .trim();
+  return { images, body: prose };
+}
+
 function normalizeNav(raw) {
   if (!raw || typeof raw !== "object" || !str(raw.label)) return null;
   return { label: str(raw.label), order: Number(raw.order) || 0 };
@@ -69,8 +122,9 @@ function normalizeNav(raw) {
 export function normalizeContent(raw = {}, { now = new Date().toISOString() } = {}) {
   const type = CONTENT_TYPES.includes(raw.type)
     ? raw.type
-    // Records predating the type field carried templateType with no "page" case.
-    : (raw.templateType === "podcast" ? "podcast" : "article");
+    // Records predating the type field carried templateType, which ohshelly used
+    // for exactly this distinction.
+    : (["podcast", "gallery"].includes(raw.templateType) ? raw.templateType : "article");
 
   const title = str(raw.title) || str(raw.headline);
   const slug = str(raw.slug) || (isDated(type)
@@ -104,6 +158,21 @@ export function normalizeContent(raw = {}, { now = new Date().toISOString() } = 
     record.categoryLabel = str(raw.categoryLabel);
     record.source = normalizeSource(raw.source);
     record.audio = type === "podcast" ? normalizeAudio(raw.audio) : null;
+    if (type === "gallery") {
+      // An explicit list always wins; extraction is the fallback that makes a
+      // post authored as prose-with-pictures -- or imported from a site that
+      // stored it that way -- come out as a gallery without anyone editing it.
+      const given = normalizeImages(raw.images);
+      if (given.length) {
+        record.images = given;
+      } else {
+        const pulled = extractImages(record.body);
+        record.images = normalizeImages(pulled.images);
+        record.body = pulled.body;
+      }
+    } else {
+      record.images = [];
+    }
   } else {
     record.nav = normalizeNav(raw.nav);
   }
@@ -127,6 +196,9 @@ export function validateContent(record) {
     if (!DATE_RE.test(record.date ?? "")) problems.push("date must be YYYY-MM-DD");
     if (record.type === "podcast" && record.status === "published" && !record.audio?.url) {
       problems.push("a published podcast needs an audio file");
+    }
+    if (record.type === "gallery" && record.status === "published" && !record.images?.length) {
+      problems.push("a published gallery needs at least one image");
     }
   }
   // Reserved because the renderer writes these itself; a page claiming one would
