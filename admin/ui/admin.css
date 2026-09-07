@@ -233,3 +233,29 @@ code{font-family:var(--mono);font-size:.88em}
 .ck.ck-editor__editable :not(pre) > code {
   background: var(--rule); padding: .1em .35em; border-radius: 3px;
 }
+
+/* ------------------------------------------------------- build with AI */
+.howto { counter-reset: howto; list-style: none; padding: 0; margin: 1.4rem 0 0; }
+.howto > li {
+  counter-increment: howto; position: relative;
+  padding: 0 0 1.4rem 2.6rem; margin: 0 0 0 .85rem;
+  border-left: 1px solid var(--rule);
+}
+.howto > li:last-child { border-left-color: transparent; padding-bottom: .4rem; }
+.howto > li::before {
+  content: counter(howto);
+  position: absolute; left: -.85rem; top: 0;
+  width: 1.7rem; height: 1.7rem; border-radius: 50%;
+  display: grid; place-items: center;
+  font-family: var(--mono); font-size: .72rem; font-weight: 600;
+  background: var(--bg); color: var(--ok); border: 1px solid var(--ok);
+}
+.howto h3 { margin: .1rem 0 .35rem; font-size: 1rem; }
+.howto p { margin: 0 0 .6rem; color: var(--soft); }
+.howto p:last-child { margin-bottom: 0; }
+.starter {
+  white-space: pre-wrap; margin: .6rem 0 0; padding: .8rem .9rem;
+  background: var(--card); border: 1px solid var(--rule); border-radius: 4px;
+  font-family: var(--mono); font-size: .78rem; line-height: 1.55; color: var(--ink);
+  max-height: 15rem; overflow-y: auto;
+}

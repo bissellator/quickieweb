@@ -96,6 +96,16 @@ await cp(path.join(ROOT, "admin", "ui"), tmp, { recursive: true });
 await writeFile(path.join(tmp, "config.json"), clientConfig());
 console.log(`  generated config.json (clientId ${googleClientId.slice(0, 12)}...)`);
 
+// The template contract, for the "Build with AI" tab to hand to somebody's
+// assistant. Staged from skills/ rather than copied into admin/ui in the repo,
+// for the same reason config.json is generated here: a second copy of a
+// contract drifts from the validator that enforces it, and the drift is
+// invisible until someone's template is rejected for breaking a rule the page
+// they were given did not mention.
+const CONTRACT = path.join(ROOT, "skills", "quickieweb-template", "SKILL.md");
+await cp(CONTRACT, path.join(tmp, "template-contract.md"));
+console.log("  staged template-contract.md (from skills/quickieweb-template)");
+
 // --delete so a removed file actually disappears: this prefix is a mirror of
 // admin/ui, not an accumulation. Safe precisely because no other process
 // writes under admin/.

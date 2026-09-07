@@ -11,7 +11,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 const ALL_VIEWS = ["gate", "emptyView", "articlesView", "editorView", "designView",
-  "adminsView", "publishView", "statsView"];
+  "adminsView", "publishView", "statsView", "aiView"];
 
 /**
  * One place that hides everything, so a new view cannot be forgotten in one of
@@ -195,6 +195,7 @@ function switchView(name) {
   if (name === "admins") loadAdmins();
   if (name === "publish") loadChangeset();
   if (name === "stats") loadStats();
+  if (name === "ai") loadContract();
 }
 
 document.querySelectorAll(".tab").forEach((t) =>
@@ -1564,3 +1565,69 @@ $("staticList").addEventListener("click", async (ev) => {
     err($("designErr"), e.message);
   }
 });
+
+// ---- Build with AI: hand the template contract to somebody else's assistant
+//
+// The contract is `skills/quickieweb-template/SKILL.md`, staged next to the
+// console at deploy time rather than copied into admin/ui in the repo -- one
+// source of truth, and no second copy to drift from the validator it describes.
+//
+// The clipboard is the whole interface here. Someone who wants an assistant to
+// build their site should not have to find a file, and should not be asked to
+// read the contract themselves: it is written for the model, not for them.
+const STARTER_PROMPT = `I want you to build a template for my Quickieweb site.
+
+The rules I just pasted are the whole contract - please follow them exactly,
+especially: no JavaScript of your own, no external fonts or images, and every
+{{field}} has to be one the data model actually has.
+
+My site is: [what it is, in a sentence]
+The feeling I want: [e.g. quiet and typographic / bold and loud / like a zine]
+Colours: [or say "you choose"]
+
+Give me every file as its own code block, and tell me the exact filename and
+folder for each one. Use the id "mytheme" in template.json.`;
+
+let contractText = null;
+
+async function loadContract() {
+  $("starterPrompt").textContent = STARTER_PROMPT;
+  if (contractText !== null) return;
+  try {
+    const res = await fetch("template-contract.md", { credentials: "same-origin" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    contractText = await res.text();
+    $("contractMeta").textContent = `${Math.round(contractText.length / 1024)}KB of rules`;
+  } catch {
+    // Never leave the button looking live when it cannot do anything.
+    $("copyContract").disabled = true;
+    $("contractMeta").textContent =
+      "The rules file did not ship with this console. Redeploy the admin UI.";
+  }
+}
+
+async function copyToClipboard(text, button, done = "Copied") {
+  const label = button.textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    button.textContent = done;
+  } catch {
+    // Clipboard access needs a secure context and a user gesture; both hold
+    // here, but a browser can still refuse. Select-to-copy is the fallback that
+    // always works.
+    button.textContent = "Press Ctrl+C";
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    setTimeout(() => ta.remove(), 15000);
+  }
+  setTimeout(() => { button.textContent = label; }, 2500);
+}
+
+$("copyContract").addEventListener("click", (ev) => {
+  if (contractText) copyToClipboard(contractText, ev.target, "Copied - paste it into your assistant");
+});
+$("copyPrompt").addEventListener("click", (ev) => copyToClipboard(STARTER_PROMPT, ev.target));

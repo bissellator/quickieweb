@@ -27,6 +27,7 @@
     <button class="tab" data-view="stats">Stats</button>
     <button class="tab" data-view="admins">People</button>
     <button class="tab" data-view="publish">Publish</button>
+    <button class="tab" data-view="ai">Build with AI</button>
   </nav>
   <span class="siteswitch" id="siteSwitch" hidden>
     <select id="siteSelect" title="Which site you are editing"></select>
@@ -269,6 +270,80 @@
       changed files to the live bucket and invalidates the CDN.</p>
     <div class="changeset" id="changeset">checking...</div>
     <pre class="log" id="publishLog" hidden></pre>
+  </section>
+
+  <section class="view" id="aiView" hidden>
+    <div class="viewhead">
+      <h1>Build with AI</h1>
+    </div>
+    <p class="muted">Any chat assistant &mdash; Claude, ChatGPT, whatever you already
+      pay for &mdash; can design a template for this site. You do not need to know HTML.
+      You paste it one page of rules, describe the site you want, save what it gives
+      you, and upload the folder. Five minutes.</p>
+
+    <ol class="howto">
+      <li>
+        <h3>Hand your assistant the rules</h3>
+        <p>Templates here are deliberately limited, so an assistant that has not read
+          the rules will write something that gets rejected. This button copies the
+          whole contract &mdash; one page &mdash; to your clipboard. Paste it into a new
+          conversation.</p>
+        <p><button class="btn primary" id="copyContract">Copy the template rules</button>
+          <span class="muted small" id="contractMeta"></span></p>
+      </li>
+
+      <li>
+        <h3>Describe the site you want</h3>
+        <p>In the same conversation, say what you are after. Be specific about feel
+          rather than markup &mdash; that is the part it cannot guess and you should not
+          have to spell out in code.</p>
+        <p><button class="btn" id="copyPrompt">Copy a starter prompt</button></p>
+        <pre class="starter" id="starterPrompt"></pre>
+      </li>
+
+      <li>
+        <h3>Save the files into one folder</h3>
+        <p>You will get a handful of files &mdash; <code>template.json</code>, a few
+          things under <code>layouts/</code> and <code>partials/</code>, and a
+          stylesheet. Make a folder on your computer and save them with exactly the
+          names and subfolders it gives you.</p>
+      </li>
+
+      <li>
+        <h3>Upload it</h3>
+        <p>Go to <strong>Design &rarr; Your own templates</strong>, choose that folder,
+          and press Upload. It is checked before it is stored: nothing broken can reach
+          your site. The template is yours alone &mdash; no other site can see it.</p>
+      </li>
+
+      <li>
+        <h3>Look before you switch</h3>
+        <p>Press <strong>Preview</strong> next to it. That renders your real posts with
+          the new template without adopting it, so you can back out by closing the tab.
+          Happy? Press <strong>Use this</strong>. Every post and page is kept.</p>
+      </li>
+    </ol>
+
+    <h2 class="sub">When it says no</h2>
+    <p class="muted">An upload that fails comes back with the exact file and line that
+      is wrong. You do not have to understand it &mdash; paste it back into the same
+      conversation and say "this is the error, please fix it." That loop is the whole
+      point of the checker: your assistant can correct its own work.</p>
+
+    <h2 class="sub">One-off pages</h2>
+    <p class="muted">For a single page that is nothing like the rest of the site &mdash;
+      a product page, a calculator, a landing page &mdash; you do not need a template at
+      all. Ask for one complete HTML file, then upload it under
+      <strong>Design &rarr; Static pages</strong>. It is published exactly as written,
+      with your own styling and scripts, and none of the site's furniture around it.</p>
+
+    <h2 class="sub">Connecting your assistant directly</h2>
+    <p class="muted">Today the loop above has you moving files by hand. We are building
+      an MCP connector so your assistant can do it itself: you will point it at
+      Quickieweb once, log in here, tick which sites it may touch, and it can then draft,
+      check and upload without you saving anything. It will never publish unless you
+      grant it that separately. Not ready yet &mdash; the manual loop above works now and
+      will keep working.</p>
   </section>
 
 </main>
