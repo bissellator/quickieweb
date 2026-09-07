@@ -150,10 +150,17 @@ const ROUTE_TABLE = {
   preview:   "content",
 };
 
-export function requirementFor(head, method) {
+// Routes whose verb misdescribes what they do. A dry run arrives as a POST
+// because it carries a body, not because it changes anything, and a token that
+// may read a template should be able to check one.
+const READ_DESPITE_VERB = new Set(["templates/validate"]);
+
+export function requirementFor(head, method, second = null) {
   const resource = ROUTE_TABLE[head];
   if (!resource) return null;
-  const action = ["GET", "HEAD"].includes(method) ? "read" : "write";
+  const action = ["GET", "HEAD"].includes(method) || READ_DESPITE_VERB.has(`${head}/${second}`)
+    ? "read"
+    : "write";
   // GET /publish reads the pending changeset; POST promotes it.
   return { resource, action };
 }

@@ -225,11 +225,11 @@ async function requireActor(headers) {
  * this" rather than "any token does": a route added without a scope decision
  * fails closed.
  */
-function requireScope(actor, head, method, siteId) {
+function requireScope(actor, head, method, siteId, second = null) {
   if (actor.scopes === null) return;
   if (UNSCOPED_ROUTES.has(head)) return;
 
-  const need = requirementFor(head, method);
+  const need = requirementFor(head, method, second);
   if (!need) {
     throw new AuthError(
       `"${head}" cannot be reached with an access token. Use the console.`, 403);
@@ -924,7 +924,7 @@ async function routeApi({ method, segments, query, headers, body }) {
 
   // Membership decided what this person may do; the token now decides how much
   // of that it may act on. Both, in that order, for every route below.
-  requireScope(actor, head, method, site.siteId);
+  requireScope(actor, head, method, site.siteId, second);
 
   // ---- content: posts, podcast episodes and static pages, one shape
   //
@@ -1045,6 +1045,26 @@ async function routeApi({ method, segments, query, headers, body }) {
         }
         throw err;
       }
+    }
+
+    // POST /templates/validate -> a dry run. Writes nothing.
+    //
+    // The loop that makes an assistant able to write a template at all: draft,
+    // check, read findings that name a file and a line, fix. Without it a model
+    // is guessing against a contract it cannot see, and its first signal is a
+    // rejected upload.
+    if (method === "POST" && second === "validate") {
+      const b = asJson();
+      if (!b.files || typeof b.files !== "object" || Array.isArray(b.files)) {
+        return json(400, { error: 'Send { "files": { "template.json": "…", … } }' });
+      }
+      const { ok, manifest, findings } = validateTemplate(b.files);
+      return json(200, {
+        ok,
+        id: manifest?.id ?? null,
+        errors: findings.filter((f) => f.level === "error").length,
+        findings,
+      });
     }
 
     // DELETE /templates/<id> -> drop one of this site's own templates.
