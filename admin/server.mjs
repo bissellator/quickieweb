@@ -29,6 +29,16 @@ import {
   validateMemberChange, canAdminister, roleInSite, SITE_ROLES,
 } from "../shared/site.mjs";
 import { processLogs, readReport, readDay, readDetailWindow } from "./lib/stats.mjs";
+import * as oauthStore from "./lib/oauth-store.mjs";
+import {
+  looksLikePat, hashSecret, OAuthError, verifyPkce, isAllowedRedirectUri,
+  matchRedirectUri, signState, verifyState, checkRegistration, newClientId,
+  newPat, newAuthCode, authorizationServerMetadata, protectedResourceMetadata,
+} from "../shared/oauth.mjs";
+import {
+  requirementFor, allows, clampToRole, refusedBy, grantableFor, normalizeScopes,
+  describeScopes, UNSCOPED_ROUTES, DEFAULT_AGENT_RESOURCES, RESOURCES,
+} from "../shared/scopes.mjs";
 import {
   loadTemplate, readCatalog, assetKeysFor, TemplateNotFound, TemplateRejected,
   listSiteTemplates, putSiteTemplate, removeSiteTemplate, evictSiteTemplate,
@@ -53,6 +63,16 @@ const SESSION_SECRET = process.env.SESSION_SECRET ?? "";
 // when nothing said explicitly -- `acme.quickieweb.com` means the site `acme`.
 // Empty on a self-hosted install, where the site comes from the header instead.
 const HOSTED_DOMAIN = process.env.HOSTED_DOMAIN ?? "";
+// The OAuth issuer: the console's own origin. Every discovery document, every
+// redirect and every token is scoped to this exact string, so it must match
+// what a client typed, character for character.
+// Everything the OAuth flow needs reachable without an /api prefix. Kept as a
+// list so the CloudFront behaviors that route them (infra/wire-oauth.mjs) and
+// the server agree on exactly one set of paths.
+export const OAUTH_ROOT_PATHS = ["/.well-known", "/authorize", "/register", "/oauth", "/consent"];
+
+const ISSUER = process.env.OAUTH_ISSUER
+  || (HOSTED_DOMAIN ? `https://app.${HOSTED_DOMAIN}` : "");
 
 // Where a new tenant's bytes go. One pair of buckets behind one distribution,
 // with each site a prefix inside them; see shared/site.mjs for why.
@@ -153,6 +173,29 @@ function bearer(headers) {
 async function requireActor(headers) {
   const token = bearer(headers);
 
+  // A personal access token identifies a person the same way a session does --
+  // the record names the email -- but carries scopes, which a session does not.
+  // A person in the console is limited by their role; a token is limited by its
+  // role AND its scopes, and the scopes can only ever narrow.
+  if (looksLikePat(token)) {
+    const record = await oauthStore.getPat(s3, hashSecret(token));
+    if (!record) throw new AuthError("That token is not valid, or has been revoked", 401);
+    const email = String(record.email ?? "").trim().toLowerCase();
+    const user = await registry.getUser(s3, email);
+    oauthStore.touchPat(s3, record);
+    return {
+      email,
+      name: user?.name ?? null,
+      displayName: user?.name ?? email,
+      platformRole: user?.platformRole ?? "user",
+      isStaff: registry.isStaff(user),
+      // Present only for a token. `null` means a person is driving, so no scope
+      // narrowing applies -- the distinction every scope check below turns on.
+      scopes: record.scopes ?? [],
+      tokenName: record.name ?? "",
+    };
+  }
+
   const identity = looksLikeSession(token)
     ? verifySession(token, SESSION_SECRET)
     : await verifyGoogleIdToken(token, GOOGLE_CLIENT_ID);
@@ -167,7 +210,35 @@ async function requireActor(headers) {
     displayName: identity.name ?? user?.name ?? email,
     platformRole: user?.platformRole ?? "user",
     isStaff: registry.isStaff(user),
+    scopes: null,
   };
+}
+
+/**
+ * What a token may reach, on top of what its holder's role allows.
+ *
+ * Called for every site-scoped route. A person in the console has
+ * `scopes === null` and passes straight through -- this narrows a credential,
+ * it never widens one, so the existing role checks stay exactly where they are.
+ *
+ * An unlisted route has no requirement, which is read as "no token reaches
+ * this" rather than "any token does": a route added without a scope decision
+ * fails closed.
+ */
+function requireScope(actor, head, method, siteId) {
+  if (actor.scopes === null) return;
+  if (UNSCOPED_ROUTES.has(head)) return;
+
+  const need = requirementFor(head, method);
+  if (!need) {
+    throw new AuthError(
+      `"${head}" cannot be reached with an access token. Use the console.`, 403);
+  }
+  if (!allows(actor.scopes, { site: siteId, resource: need.resource, action: need.action })) {
+    throw new AuthError(
+      `This token does not allow ${need.action} on ${need.resource}` +
+      `${siteId ? ` for "${siteId}"` : ""}.`, 403);
+  }
 }
 
 /**
@@ -383,13 +454,320 @@ async function routeApi({ method, segments, query, headers, body }) {
     return await servePreview(segments.slice(1));
   }
 
-  const actor = await requireActor(headers);
-
   const asJson = () => {
     if (!body || !body.length) return {};
     try { return JSON.parse(body.toString("utf8")); }
     catch { throw new AuthError("Request body is not valid JSON", 400); }
   };
+
+  // ---- OAuth 2.1 authorization server
+  //
+  // These are NOT site-scoped and must sit above siteContext: a client
+  // discovering that it needs to authenticate has no site yet, and asking it
+  // for one before it can log in is a chicken-and-egg it cannot solve.
+  //
+  // Errors here follow RFC 6749 shape ({error, error_description}) rather than
+  // this API's {error}, because a generic OAuth client parses the former and
+  // will show the latter as "unknown error".
+  const oauthFail = (err) => json(err.status ?? 400, {
+    error: err.code ?? "invalid_request",
+    error_description: err.description ?? err.message,
+  });
+
+  // RFC 8414. Served at both the bare path and the MCP-style suffixed one,
+  // because clients differ on which they probe first and a 404 on discovery
+  // reads as "this server does not do OAuth".
+  if (method === "GET" && head === ".well-known") {
+    const doc = segments[1] ?? "";
+    if (doc === "oauth-authorization-server" || doc.startsWith("oauth-authorization-server")) {
+      return json(200, authorizationServerMetadata(ISSUER));
+    }
+    if (doc === "oauth-protected-resource" || doc.startsWith("oauth-protected-resource")) {
+      return json(200, protectedResourceMetadata(`${ISSUER}/api`, ISSUER));
+    }
+    return json(404, { error: "not_found" });
+  }
+
+  // RFC 7591 dynamic client registration. Deliberately open: an MCP client
+  // registers itself before any human is involved, so requiring a pre-shared
+  // client id would mean a person editing a table before they can log in. What
+  // registration grants is the right to ASK -- nothing is authorized until
+  // somebody approves it on the consent screen.
+  if (method === "POST" && head === "register") {
+    try {
+      const client = {
+        ...checkRegistration(asJson()),
+        client_id: newClientId(),
+        client_id_issued_at: Math.floor(Date.now() / 1000),
+      };
+      await oauthStore.putClient(s3, client);
+      return json(201, client);
+    } catch (err) {
+      if (err instanceof OAuthError) return oauthFail(err);
+      throw err;
+    }
+  }
+
+  // GET /authorize -- hand the request to the consent page as a signed blob.
+  //
+  // Nothing is stored here. The redirect URI, the PKCE challenge, the client
+  // and a nonce are signed into a state token the consent page hands back, so
+  // a Lambda that scales to zero never has to hold a pending authorization.
+  if (method === "GET" && head === "authorize") {
+    const p = Object.fromEntries(query.entries());
+    try {
+      const client = await oauthStore.getClient(s3, p.client_id);
+      if (!client) throw new OAuthError("invalid_client", "Unknown client_id");
+
+      // Redirect and client are validated BEFORE anything is echoed back to a
+      // redirect_uri, because an unvalidated redirect is the one error that
+      // must never be delivered by redirecting to it.
+      if (!matchRedirectUri(client.redirect_uris, p.redirect_uri)) {
+        throw new OAuthError("invalid_request",
+          "redirect_uri does not match one registered by this client");
+      }
+      if (p.response_type !== "code") {
+        throw new OAuthError("unsupported_response_type", "Only response_type=code is supported");
+      }
+      if (p.code_challenge_method !== "S256") {
+        throw new OAuthError("invalid_request", "code_challenge_method must be S256");
+      }
+      if (!p.code_challenge) throw new OAuthError("invalid_request", "code_challenge is required");
+
+      const state = signState({
+        c: client.client_id,
+        n: client.client_name ?? "",
+        r: p.redirect_uri,
+        h: p.code_challenge,
+        s: p.state ?? "",
+      }, SESSION_SECRET);
+
+      // Straight to the console's consent page. It signs the person in with the
+      // same Google flow the console uses, then POSTs back to /authorize/consent.
+      return {
+        status: 302,
+        headers: {
+          location: `/consent.html#${encodeURIComponent(state)}`,
+          "cache-control": "no-store",
+        },
+        body: "",
+      };
+    } catch (err) {
+      if (err instanceof OAuthError) return oauthFail(err);
+      throw err;
+    }
+  }
+
+  // What the consent page needs to render: who is asking, and which sites this
+  // person could actually grant. Authenticated as the person, like any other
+  // console call.
+  if (method === "GET" && head === "authorize" && second === "context") {
+    return json(404, { error: "not_found" });
+  }
+  if (head === "consent") {
+    const actor = await requireActor(headers);
+    if (actor.scopes !== null) {
+      return json(403, { error: "A token cannot approve a new grant. Sign in." });
+    }
+    let claims;
+    try {
+      claims = verifyState(asJson().state ?? query.get("state"), SESSION_SECRET);
+    } catch (err) {
+      return oauthFail(err);
+    }
+
+    // Which sites this person may offer, and at what. Rendered from membership,
+    // so a site they are only an editor on shows what it can and cannot grant
+    // rather than quietly disappearing.
+    const mine = await registry.sitesFor(s3, actor.email, { staff: actor.isStaff });
+    const offers = mine.map((s) => ({
+      siteId: s.siteId,
+      name: s.name || s.siteId,
+      role: s.role,
+      grantable: grantableFor(s.role, s.siteId),
+      // Everything an agent normally wants, pre-ticked where the role allows
+      // it. Publishing is deliberately not in this list.
+      suggested: clampToRole(
+        DEFAULT_AGENT_RESOURCES.map((r) => `qw:${s.siteId}:${r}:write`), s.role, s.siteId),
+      refused: refusedBy(
+        DEFAULT_AGENT_RESOURCES.map((r) => `qw:${s.siteId}:${r}:write`), s.role, s.siteId),
+    }));
+
+    if (method === "GET") {
+      return json(200, {
+        client: { id: claims.c, name: claims.n || "An application" },
+        email: actor.email,
+        sites: offers,
+        resources: RESOURCES,
+      });
+    }
+
+    if (method === "POST") {
+      const body = asJson();
+      // Clamp per site against the role, again, here. The consent page already
+      // did it for display; doing it only there would make the UI the security
+      // boundary, and a client that POSTs its own body would walk past it.
+      const granted = [];
+      for (const offer of offers) {
+        const asked = normalizeScopes(body.scopes ?? []).filter((sc) => sc.startsWith(`qw:${offer.siteId}:`));
+        granted.push(...clampToRole(asked, offer.role, offer.siteId));
+      }
+      if (!granted.length) {
+        return json(400, { error: "Choose at least one site to grant access to." });
+      }
+
+      // The durable credential. The client never sees this secret: the code
+      // binds to its hash, and the token endpoint hands back the secret exactly
+      // once, to whoever proves they hold the PKCE verifier.
+      const pat = newPat();
+      const days = Math.min(Math.max(Number(body.days) || 30, 1), 365);
+      await oauthStore.putPat(s3, {
+        hash: pat.hash,
+        email: actor.email,
+        name: claims.n || "Connected app",
+        scopes: granted,
+        source: "oauth",
+        clientId: claims.c,
+        clientName: claims.n ?? "",
+        expiresAt: new Date(Date.now() + days * 86400_000).toISOString(),
+      });
+
+      const code = newAuthCode();
+      await oauthStore.putCode(s3, code.hash, {
+        clientId: claims.c,
+        redirectUri: claims.r,
+        challenge: claims.h,
+        patHash: pat.hash,
+        patSecret: pat.secret,
+        email: actor.email,
+        scopes: granted,
+      });
+
+      const url = new URL(claims.r);
+      url.searchParams.set("code", code.code);
+      if (claims.s) url.searchParams.set("state", claims.s);
+      return json(200, { redirect: url.toString(), scopes: granted });
+    }
+  }
+
+  // POST /oauth/token -- authorization_code + PKCE, or refresh_token.
+  //
+  // Accepts form encoding as well as JSON: RFC 6749 says form, and a generic
+  // OAuth client sends form. Accepting only JSON is the quiet mistake that
+  // makes a spec-compliant client fail at the last step of the flow.
+  if (method === "POST" && head === "oauth" && second === "token") {
+    const ct = String(headers["content-type"] ?? headers["Content-Type"] ?? "");
+    const form = ct.includes("application/x-www-form-urlencoded")
+      ? Object.fromEntries(new URLSearchParams(String(body ?? "")))
+      : asJson();
+
+    try {
+      if (form.grant_type === "refresh_token") {
+        // The refresh token IS the PAT. Presenting it returns a fresh access
+        // token, which is the same string -- there is one credential, and its
+        // expiry is the PAT's. Kept so a standard client's refresh path works
+        // rather than 400ing at the end of a working day.
+        const record = await oauthStore.getPat(s3, hashSecret(form.refresh_token));
+        if (!record) throw new OAuthError("invalid_grant", "That refresh token is not valid", 400);
+        return json(200, {
+          access_token: form.refresh_token,
+          token_type: "Bearer",
+          refresh_token: form.refresh_token,
+          scope: "quickieweb",
+          expires_in: Math.max(60, Math.floor(
+            (Date.parse(record.expiresAt ?? "") - Date.now()) / 1000) || 3600),
+        });
+      }
+
+      if (form.grant_type !== "authorization_code") {
+        throw new OAuthError("unsupported_grant_type", "Unsupported grant_type");
+      }
+
+      // Read-and-delete. A code presented twice fails the second time even if
+      // the first redemption is still in flight: replay is an attack, not a
+      // retry.
+      const record = await oauthStore.takeCode(s3, hashSecret(form.code ?? ""));
+      if (!record) throw new OAuthError("invalid_grant", "That code is not valid or was already used");
+      if (record.clientId !== form.client_id) {
+        throw new OAuthError("invalid_grant", "That code was issued to a different client");
+      }
+      if (record.redirectUri !== form.redirect_uri) {
+        throw new OAuthError("invalid_grant", "redirect_uri does not match the one authorized");
+      }
+      if (!verifyPkce(form.code_verifier, record.challenge)) {
+        throw new OAuthError("invalid_grant", "code_verifier does not match the challenge");
+      }
+
+      const pat = await oauthStore.getPat(s3, record.patHash);
+      if (!pat) throw new OAuthError("invalid_grant", "That grant has been revoked");
+
+      return json(200, {
+        access_token: record.patSecret,
+        token_type: "Bearer",
+        refresh_token: record.patSecret,
+        scope: "quickieweb",
+        expires_in: Math.max(60, Math.floor(
+          (Date.parse(pat.expiresAt ?? "") - Date.now()) / 1000) || 3600),
+      });
+    } catch (err) {
+      if (err instanceof OAuthError) return oauthFail(err);
+      throw err;
+    }
+  }
+
+  // ---- tokens: the console's own view of what it has issued
+  if (head === "tokens") {
+    const actor = await requireActor(headers);
+    if (actor.scopes !== null) {
+      return json(403, { error: "A token cannot manage tokens." });
+    }
+
+    if (method === "GET") {
+      const tokens = await oauthStore.listPatsFor(s3, actor.email);
+      return json(200, {
+        tokens: tokens.map((t) => ({ ...t, summary: describeScopes(t.scopes) })),
+      });
+    }
+
+    // Minting by hand, for a script or a headless job. The same record shape
+    // consent produces, so there is one kind of credential to audit.
+    if (method === "POST") {
+      const b = asJson();
+      const siteId = String(b.siteId ?? "").trim().toLowerCase();
+      const { role } = await registry.authorizeSite(s3, {
+        email: actor.email, siteId, staff: actor.isStaff,
+      });
+      const granted = clampToRole(b.scopes ?? [], role, siteId);
+      if (!granted.length) {
+        return json(400, {
+          error: "Nothing to grant. Your role on that site may not allow what you asked for.",
+          refused: refusedBy(b.scopes ?? [], role, siteId),
+        });
+      }
+
+      const pat = newPat();
+      const days = Math.min(Math.max(Number(b.days) || 90, 1), 365);
+      await oauthStore.putPat(s3, {
+        hash: pat.hash,
+        email: actor.email,
+        name: String(b.name ?? "").slice(0, 80) || "Access token",
+        scopes: granted,
+        source: "console",
+        expiresAt: new Date(Date.now() + days * 86400_000).toISOString(),
+      });
+      // The one and only time this value exists outside the caller's hands.
+      return json(201, { token: pat.secret, scopes: granted, expiresInDays: days });
+    }
+
+    if (method === "DELETE" && second) {
+      const record = await oauthStore.findPatByShortId(s3, actor.email, second);
+      if (!record) return json(404, { error: "No such token" });
+      await oauthStore.revokePat(s3, record.hash);
+      return json(200, { revoked: second });
+    }
+  }
+
+  const actor = await requireActor(headers);
 
   // Exchange a verified Google ID token for a session. This is the only route
   // that needs a Google credential; everything else runs on the session, so a
@@ -543,6 +921,10 @@ async function routeApi({ method, segments, query, headers, body }) {
   const ctx = await siteContext(actor, query, headers);
   const { site, role, store } = ctx;
   const mayAdminister = canAdminister(role) || actor.isStaff;
+
+  // Membership decided what this person may do; the token now decides how much
+  // of that it may act on. Both, in that order, for every route below.
+  requireScope(actor, head, method, site.siteId);
 
   // ---- content: posts, podcast episodes and static pages, one shape
   //
@@ -966,6 +1348,21 @@ export async function handleRequest({ method, pathname, query, headers, body }) 
       const segments = pathname.replace(/^\/api\/?/, "").split("/").filter(Boolean);
       return await routeApi({ method, segments, query, headers, body });
     }
+
+    // The OAuth surface answers at the ROOT as well as under /api.
+    //
+    // Not a convenience. RFC 8414 builds the metadata URL by inserting
+    // /.well-known/ between the host and the issuer's path, and a generic MCP
+    // client constructs the rest from the origin it was given. An issuer of
+    // https://app.example/api therefore puts its own discovery document at
+    // https://app.example/.well-known/oauth-authorization-server/api, which
+    // nothing would think to ask for. The issuer has to be the bare origin, so
+    // these paths have to exist there.
+    if (OAUTH_ROOT_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
+      const segments = pathname.replace(/^\//, "").split("/").filter(Boolean);
+      return await routeApi({ method, segments, query, headers, body });
+    }
+
     return { status: 404, headers: { "content-type": "text/plain" }, body: "not found" };
   } catch (err) {
     // Any error that carries its own status keeps it. Before this, a

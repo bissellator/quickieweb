@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Authorize an application - Quickieweb</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="admin.css">
+<style>
+  /* The consent screen is one decision on one card, not a console. */
+  .consent { max-width: 30rem; margin: 3rem auto; padding: 0 1rem 4rem; }
+  .card {
+    background: var(--card); border: 1px solid var(--rule);
+    border-radius: 8px; padding: 1.6rem;
+  }
+  .brand {
+    font-weight: 600; font-size: 1.05rem;
+    padding-bottom: .8rem; border-bottom: 1px solid var(--rule); margin-bottom: 1.1rem;
+  }
+  .asking { font-size: 1.15rem; font-weight: 600; margin: 0 0 .2rem; }
+  .who { color: var(--soft); font-size: .88rem; margin: 0 0 1.2rem; }
+
+  .site {
+    border: 1px solid var(--rule); border-radius: 6px;
+    padding: .8rem .9rem; margin-bottom: .7rem;
+  }
+  .site.off { opacity: .6; }
+  .site-head { display: flex; align-items: baseline; gap: .5rem; }
+  .site-head label { font-weight: 600; display: flex; align-items: center; gap: .5rem; cursor: pointer; }
+  .site-role {
+    margin-left: auto; font-family: var(--mono); font-size: .64rem;
+    text-transform: uppercase; letter-spacing: .06em; color: var(--faint);
+  }
+  .grants { margin: .5rem 0 0; font-size: .82rem; color: var(--soft); }
+  .grants ul { list-style: none; margin: .35rem 0 0; padding: 0;
+    display: flex; flex-wrap: wrap; gap: .3rem; }
+  .grants li {
+    font-family: var(--mono); font-size: .68rem;
+    border: 1px solid var(--rule); border-radius: 3px; padding: .1rem .35rem;
+  }
+  .refused { color: var(--accent); margin-top: .4rem; font-size: .8rem; }
+
+  .actions { display: flex; gap: .6rem; margin-top: 1.3rem; }
+  .actions .btn { flex: 1; justify-content: center; }
+  .foot { color: var(--faint); font-size: .78rem; margin-top: 1rem; line-height: 1.5; }
+  .signin { text-align: center; padding: 1rem 0; }
+  #gbtn { display: flex; justify-content: center; margin: 1rem 0; }
+</style>
+</head>
+<body>
+
+<main class="consent">
+  <div class="card">
+    <div class="brand">Quickieweb</div>
+
+    <!-- Sign in first. Nothing about the grant is shown to somebody who has not
+         proved who they are: the site list itself is information. -->
+    <section id="signinStep" hidden>
+      <p class="asking" id="signinTitle">Sign in to continue</p>
+      <p class="who">An application is asking for access to your sites.</p>
+      <div id="gbtn"></div>
+      <p class="err" id="signinErr" hidden></p>
+    </section>
+
+    <section id="grantStep" hidden>
+      <p class="asking" id="clientName">An application wants access</p>
+      <p class="who" id="asWho"></p>
+
+      <div id="siteList"></div>
+
+      <label class="muted small" style="display:block;margin-top:.9rem">
+        Expires after
+        <select id="days">
+          <option value="7">7 days</option>
+          <option value="30" selected>30 days</option>
+          <option value="90">90 days</option>
+          <option value="365">a year</option>
+        </select>
+      </label>
+
+      <div class="actions">
+        <button class="btn" id="cancel" type="button">Cancel</button>
+        <button class="btn primary" id="allow" type="button">Allow</button>
+      </div>
+      <p class="foot" id="foot"></p>
+      <p class="err" id="grantErr" hidden></p>
+    </section>
+
+    <section id="doneStep" hidden>
+      <p class="asking">Approved</p>
+      <p class="who" id="doneBody">Returning you to the application...</p>
+    </section>
+
+    <section id="failStep" hidden>
+      <p class="asking">This link is not usable</p>
+      <p class="who" id="failBody"></p>
+    </section>
+  </div>
+</main>
+
+<script type="module" src="consent.js"></script>
+</body>
+</html>

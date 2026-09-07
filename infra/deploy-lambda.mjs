@@ -158,6 +158,19 @@ const inline = {
       Resource: `arn:aws:s3:::${PLATFORM || "none"}/accounts/*`,
     },
     {
+      // OAuth records: registered clients, one-time authorization codes and the
+      // scoped tokens they mint. Read-write, and scoped to oauth/ so the same
+      // credential still cannot touch a template or a site record.
+      //
+      // Nothing here is a raw secret -- a token and a code are both stored under
+      // the SHA-256 of the secret -- so a leak of this prefix reveals what
+      // credentials exist and what they may reach, not how to use one.
+      Sid: "ReadWriteOAuthRecords",
+      Effect: "Allow",
+      Action: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      Resource: `arn:aws:s3:::${PLATFORM || "none"}/oauth/*`,
+    },
+    {
       // Listing needs the bucket ARN, not the object ARN, so it is conditioned
       // on the prefix instead -- otherwise "list the registry" would also mean
       // "enumerate every template version in the library".
@@ -166,7 +179,12 @@ const inline = {
       Action: ["s3:ListBucket"],
       Resource: `arn:aws:s3:::${PLATFORM || "none"}`,
       Condition: {
-        StringLike: { "s3:prefix": ["templates/*", "accounts/*", "templates/", "accounts/"] },
+        StringLike: {
+          "s3:prefix": [
+            "templates/*", "accounts/*", "oauth/*",
+            "templates/", "accounts/", "oauth/",
+          ],
+        },
       },
     },
     {
