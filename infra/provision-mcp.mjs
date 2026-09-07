@@ -11,11 +11,22 @@
 //   that site" would read "not found" and conclude the site does not exist.
 //   This one passes status codes through untouched.
 //
-//   A viewer-response function. Lambda function URLs rename WWW-Authenticate to
-//   x-amzn-Remapped-WWW-Authenticate, which no MCP client looks at, so the 401
-//   challenge that begins discovery never registers. edge/mcp-headers.js
-//   renames it back. Without it nothing can log in and the symptom is a server
-//   that appears to 401 forever.
+//   A response headers policy carrying WWW-Authenticate. Lambda function URLs
+//   RESERVE that header and rename what the function sent to
+//   x-amzn-Remapped-WWW-Authenticate, which no MCP client looks at -- so the 401
+//   that begins discovery would never register, and the symptom is a server that
+//   appears to 401 forever with no way in.
+//
+//   The obvious fix, a viewer-response CloudFront Function that renames it back,
+//   DOES NOT WORK and it took measuring to see why: CloudFront Functions do not
+//   execute on viewer-response for error responses. Verified directly -- a
+//   marker header set unconditionally by such a function appeared on a 200 and
+//   was absent from a 401. A response headers policy does apply to errors
+//   (verified the same way), so the challenge is attached statically here.
+//
+//   It therefore rides on every response, including 200s. That is harmless:
+//   WWW-Authenticate is only meaningful on a 401 (RFC 7235) and carries nothing
+//   private -- the metadata URL it names is public by design.
 //
 //   No tenant router. mcp.<domain> is not a site, and the shared distribution's
 //   viewer-request function would map it to a tenant prefix and 404.
@@ -37,7 +48,6 @@ const config = await loadConfig(ROOT).catch(reportConfigError);
 
 const STATUS_ONLY = process.argv.includes("--status");
 const FN = "qw-mcp";
-const EDGE_FN = "quickieweb-mcp-headers";
 
 const { domain: DOMAIN, hostedZoneId: ZONE, certificateArn: CERT } = config.hosted ?? {};
 for (const [k, v] of Object.entries({ domain: DOMAIN, hostedZoneId: ZONE, certificateArn: CERT })) {
@@ -79,29 +89,50 @@ if (!urlCfg) {
 const originDomain = new URL(urlCfg.FunctionUrl).host;
 log(originDomain);
 
-// -------------------------------------------------------------- edge function
-step(2, "Viewer-response header fix");
-const codePath = path.join(ROOT, "infra", "edge", "mcp-headers.js");
-let fnArn = null;
+// ------------------------------------------------------- response headers
+step(2, "Response headers policy");
+const POLICY = "quickieweb-mcp-headers";
+const CHALLENGE =
+  `Bearer realm="quickieweb", resource_metadata="https://${HOST}/.well-known/oauth-protected-resource"`;
 
-if (!STATUS_ONLY) {
-  const fnConfig = {
-    Comment: "Restore WWW-Authenticate, which function URLs rename",
-    Runtime: "cloudfront-js-2.0",
-  };
-  const describe = await aws(["cloudfront", "describe-function", "--name", EDGE_FN], { allowFail: true });
-  const saved = describe
-    ? await aws(["cloudfront", "update-function", "--name", EDGE_FN, "--if-match", describe.ETag,
-        "--function-config", JSON.stringify(fnConfig), "--function-code", `fileb://${codePath}`])
-    : await aws(["cloudfront", "create-function", "--name", EDGE_FN,
-        "--function-config", JSON.stringify(fnConfig), "--function-code", `fileb://${codePath}`]);
-  const published = await aws(["cloudfront", "publish-function", "--name", EDGE_FN,
-    "--if-match", saved.ETag]);
-  fnArn = published.FunctionSummary.FunctionMetadata.FunctionARN;
-  log(`published ${fnArn}`);
-} else {
-  const describe = await aws(["cloudfront", "describe-function", "--name", EDGE_FN], { allowFail: true });
-  log(describe ? "exists" : "MISSING (status only, not creating)");
+const policyConfig = {
+  Name: POLICY,
+  Comment: "MCP: the auth challenge function URLs would otherwise rename away",
+  SecurityHeadersConfig: {
+    StrictTransportSecurity: {
+      Override: true, AccessControlMaxAgeSec: 63072000, IncludeSubdomains: true, Preload: false,
+    },
+    ContentTypeOptions: { Override: true },
+    ReferrerPolicy: { Override: true, ReferrerPolicy: "no-referrer" },
+  },
+  CustomHeadersConfig: {
+    Quantity: 1,
+    Items: [{ Header: "WWW-Authenticate", Value: CHALLENGE, Override: false }],
+  },
+};
+
+let policyId = null;
+{
+  const list = await aws(["cloudfront", "list-response-headers-policies", "--type", "custom"],
+    { allowFail: true });
+  const existing = (list?.ResponseHeadersPolicyList?.Items ?? [])
+    .find((i) => i.ResponseHeadersPolicy?.ResponseHeadersPolicyConfig?.Name === POLICY);
+
+  if (STATUS_ONLY) {
+    log(existing ? `exists ${existing.ResponseHeadersPolicy.Id}` : "MISSING (status only)");
+    policyId = existing?.ResponseHeadersPolicy?.Id ?? null;
+  } else if (!existing) {
+    const res = await aws(["cloudfront", "create-response-headers-policy",
+      "--response-headers-policy-config", JSON.stringify(policyConfig)]);
+    policyId = res.ResponseHeadersPolicy.Id;
+    log(`created ${policyId}`);
+  } else {
+    policyId = existing.ResponseHeadersPolicy.Id;
+    const current = await aws(["cloudfront", "get-response-headers-policy", "--id", policyId]);
+    await aws(["cloudfront", "update-response-headers-policy", "--id", policyId,
+      "--if-match", current.ETag, "--response-headers-policy-config", JSON.stringify(policyConfig)]);
+    log(`updated ${policyId}`);
+  }
 }
 
 // ------------------------------------------------------------- distribution
@@ -147,10 +178,8 @@ if (found) {
       Compress: true,
       CachePolicyId: CACHING_DISABLED,
       OriginRequestPolicyId: ALL_VIEWER_EXCEPT_HOST,
-      FunctionAssociations: {
-        Quantity: 1,
-        Items: [{ EventType: "viewer-response", FunctionARN: fnArn }],
-      },
+      ResponseHeadersPolicyId: policyId,
+      FunctionAssociations: { Quantity: 0, Items: [] },
       LambdaFunctionAssociations: { Quantity: 0, Items: [] },
     },
     // Deliberately absent: CustomErrorResponses. An API client has to be able to
