@@ -19,6 +19,7 @@ admin/ui/ckeditor-LICENSE.md
 # Lambda build artifacts. The zip is ~11 MB because of the linux sharp binary;
 # rebuild it with infra/build-lambda.mjs rather than committing it.
 infra/lambda-build/
+infra/mcp-build/
 infra/*.zip
 
 # Generated from config.json by infra/deploy-admin-ui.mjs. Committing it would
