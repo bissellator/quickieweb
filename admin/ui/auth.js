@@ -103,6 +103,17 @@ export async function init(cid, changeHandler) {
     },
     auto_select: true,
     cancel_on_tap_outside: false,
+    // One Tap without the cross-origin iframe.
+    //
+    // The old prompt works by embedding accounts.google.com/gsi/iframe/select
+    // in this page, which trips Google's own report-only frame-ancestors policy
+    // and logs a violation into our console on every load -- harmless, since it
+    // is Google reporting on Google, but noise that looks like a fault.
+    //
+    // Under FedCM the browser renders the account chooser itself and no iframe
+    // is embedded, so the report stops. It is also where this has to go
+    // regardless: the iframe flow depends on third-party cookies.
+    use_fedcm_for_prompt: true,
     ...(remembered() ? { login_hint: remembered() } : {}),
   });
   gisReady = true;
