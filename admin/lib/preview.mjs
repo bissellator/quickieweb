@@ -38,14 +38,18 @@ export class PreviewError extends Error {
 }
 
 /**
- * @param claims { siteId, templateId, email }
+ * @param claims { siteId, templateId, templateScope, email }
  * @returns { token, expiresAt }
  */
-export function issuePreviewToken({ siteId, templateId, email }, secret) {
+export function issuePreviewToken({ siteId, templateId, templateScope, email }, secret) {
   if (!secret) throw new PreviewError("Server misconfigured: no SESSION_SECRET", 500);
   const payload = {
     s: siteId,
     t: templateId || "",
+    // Which shelf that id is on. A private template and a library one can
+    // share a name, so the scope has to be signed alongside it rather than
+    // guessed at serve time.
+    c: templateScope === "site" ? "site" : "",
     e: email,
     x: Math.floor(Date.now() / 1000) + PREVIEW_TTL_SEC,
   };
@@ -80,7 +84,11 @@ export function verifyPreviewToken(token, secret) {
   if (!payload.x || payload.x * 1000 < Date.now()) {
     throw new PreviewError("This preview link has expired. Open a new one.", 410);
   }
-  return { siteId: payload.s, templateId: payload.t, email: payload.e, expiresAt: payload.x * 1000 };
+  return {
+    siteId: payload.s, templateId: payload.t,
+    templateScope: payload.c === "site" ? "site" : "library",
+    email: payload.e, expiresAt: payload.x * 1000,
+  };
 }
 
 /**

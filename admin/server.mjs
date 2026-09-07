@@ -29,7 +29,14 @@ import {
   validateMemberChange, canAdminister, roleInSite, SITE_ROLES,
 } from "../shared/site.mjs";
 import { processLogs, readReport, readDay, readDetailWindow } from "./lib/stats.mjs";
-import { loadTemplate, readCatalog, assetKeysFor, TemplateNotFound } from "./lib/templates.mjs";
+import {
+  loadTemplate, readCatalog, assetKeysFor, TemplateNotFound, TemplateRejected,
+  listSiteTemplates, putSiteTemplate, removeSiteTemplate, evictSiteTemplate,
+} from "./lib/templates.mjs";
+import {
+  putStaticPage, listStaticPages, readStaticPage, removeStaticPage,
+  stageStaticPages, StaticPageRejected,
+} from "../shared/static-pages.mjs";
 import { renderSite, contentType } from "../shared/render.mjs";
 import { normalizeContent, validateContent } from "../shared/content.mjs";
 import { tokenForm } from "../shared/template/tokens.mjs";
@@ -217,9 +224,22 @@ async function allArticles(store) {
  * a site is a handful of small files, and the alternative is partial rebuilds
  * that drift out of sync with the index and the feeds.
  */
+/**
+ * How a site names its template to the loader. The siteId is not decoration: it
+ * keys the loader's cache for a private template, and two sites may hold the
+ * same id at the same version.
+ */
+const templateRefFor = (site, over = {}) => ({
+  id: site.template.id,
+  version: site.template.version,
+  scope: site.template.scope,
+  siteId: site.siteId,
+  ...over,
+});
+
 async function rebuild(ctx) {
   const { site, store } = ctx;
-  const template = await loadTemplate(s3, site.template);
+  const template = await loadTemplate(s3, templateRefFor(site), store);
   const records = (await allArticles(store)).map((a) => normalizeContent(a));
 
   const { files, warnings } = renderSite({
@@ -248,11 +268,16 @@ async function rebuild(ctx) {
   // The template's own assets are copied server-side from the platform bucket
   // into this site's staging bucket, so the bytes never pass through here and a
   // site keeps working if the library later drops that version.
-  for (const { source, target } of assetKeysFor(template)) {
-    await store.copyFromPlatform(source, target);
+  // Hand-authored pages are not in renderSite's file set -- nothing templates
+  // them -- so they are put back after it, from their source under _internal/.
+  const staticPaths = await stageStaticPages(store);
+
+  for (const { source, target, scope } of assetKeysFor(template)) {
+    if (scope === "site") await store.copyWithinStaging(source, target);
+    else await store.copyFromPlatform(source, target);
   }
 
-  return Object.keys(files);
+  return [...Object.keys(files), ...staticPaths];
 }
 
 /** Persist a change to the site record, then re-render against it. */
@@ -289,9 +314,10 @@ async function servePreview(segments) {
   const base = `/api/preview/${token}/`;
   let files = cachedFiles(token);
   if (!files) {
-    const template = await loadTemplate(s3,
-      claims.templateId ? { id: claims.templateId, version: "" } : site.template);
     const store = storeFor(site);
+    const template = await loadTemplate(s3, claims.templateId
+      ? { id: claims.templateId, version: "", scope: claims.templateScope, siteId: site.siteId }
+      : templateRefFor(site), store);
     // Staging, not live: the point of a preview is to see work that has not been
     // published, under a template the site has not adopted.
     const records = (await allArticles(store)).map((a) => normalizeContent(a));
@@ -490,7 +516,9 @@ async function routeApi({ method, segments, query, headers, body }) {
     // that 500s when it is opened.
     if (b.templateId) {
       try {
-        await loadTemplate(s3, { id: b.templateId, version: "" });
+        await loadTemplate(s3,
+          { id: b.templateId, version: "", scope: b.templateScope, siteId },
+          storeFor(site));
       } catch (err) {
         if (err instanceof TemplateNotFound) return json(400, { error: err.message });
         throw err;
@@ -498,7 +526,8 @@ async function routeApi({ method, segments, query, headers, body }) {
     }
 
     const { token, expiresAt } = issuePreviewToken(
-      { siteId, templateId: b.templateId ?? "", email: actor.email }, SESSION_SECRET);
+      { siteId, templateId: b.templateId ?? "", templateScope: b.templateScope,
+        email: actor.email }, SESSION_SECRET);
     return json(201, {
       url: `/api/preview/${token}/`,
       expiresAt,
@@ -590,34 +619,143 @@ async function routeApi({ method, segments, query, headers, body }) {
   // renderer -- and theme overrides the new template does not declare are simply
   // dropped by resolveTokens rather than carried as invisible state.
   if (head === "templates") {
+    // GET /templates -> the shared library plus this site's own uploads. Both in
+    // one payload because from the console's point of view they are one shelf
+    // with a badge on some of the items.
     if (method === "GET" && !second) {
-      const catalog = await readCatalog(s3);
-      return json(200, { active: site.template, templates: catalog.templates ?? [] });
+      const [catalog, mine] = await Promise.all([readCatalog(s3), listSiteTemplates(store)]);
+      return json(200, {
+        active: site.template,
+        templates: (catalog.templates ?? []).map((t) => ({ ...t, scope: "library" })),
+        siteTemplates: mine,
+      });
     }
+
+    // POST /templates -> upload a template into THIS SITE's own storage.
+    //
+    // The payload is a { path: text } map rather than an archive: templates are
+    // text files, the browser can build one from a folder picker, and unpacking
+    // a zip in the Lambda would mean either a dependency or hand-rolling an
+    // archive parser over attacker-supplied bytes. This shape is also what an
+    // MCP client or a script can POST without a toolchain.
+    if (method === "POST" && !second) {
+      if (!mayAdminister) return json(403, { error: "Only an owner can upload a template" });
+      const b = asJson();
+      const files = b.files;
+      if (!files || typeof files !== "object" || Array.isArray(files)) {
+        return json(400, { error: 'Send { "files": { "template.json": "…", "layouts/index.html": "…" } }' });
+      }
+      for (const [rel, text] of Object.entries(files)) {
+        if (typeof text !== "string") return json(400, { error: `${rel} is not text` });
+        // The package path space is flat and traversal-free, like every other
+        // key this system builds. A template cannot write outside its own prefix.
+        if (rel.includes("..") || rel.startsWith("/") || rel.includes("\\")) {
+          return json(400, { error: `Unsafe path in package: ${rel}` });
+        }
+      }
+
+      try {
+        const result = await putSiteTemplate(store, files);
+        return json(201, { ...result, scope: "site" });
+      } catch (err) {
+        if (err instanceof TemplateRejected) {
+          return json(400, { error: err.message, findings: err.findings });
+        }
+        throw err;
+      }
+    }
+
+    // DELETE /templates/<id> -> drop one of this site's own templates.
+    if (method === "DELETE" && second) {
+      if (!mayAdminister) return json(403, { error: "Only an owner can delete a template" });
+      // Refusing while it is in use is the difference between "you cannot delete
+      // this" and every page of the site 503ing on the next save.
+      if (site.template.scope === "site" && site.template.id === second) {
+        return json(409, { error: `"${second}" is the template this site is using. Switch first.` });
+      }
+      try {
+        const removed = await removeSiteTemplate(store, second, query.get("version"));
+        // The loader caches by id@version inside a warm container, so a deleted
+        // template would keep rendering until that container recycled.
+        evictSiteTemplate(site.siteId, second);
+        return json(200, { id: second, objectsRemoved: removed });
+      } catch (err) {
+        if (err instanceof TemplateNotFound) return json(404, { error: err.message });
+        throw err;
+      }
+    }
+
     if (method === "PUT" && !second) {
       if (!mayAdminister) return json(403, { error: "Only an owner can change the template" });
       const b = asJson();
       if (!b.id) return json(400, { error: "id is required" });
+      const scope = b.scope === "site" ? "site" : "library";
 
       // Load before saving: a template that does not exist or does not compile
       // must fail here, not on the next save when the site is already pointed at
       // it and every rebuild throws.
       let loaded;
       try {
-        loaded = await loadTemplate(s3, { id: b.id, version: b.version ?? "" });
+        loaded = await loadTemplate(s3,
+          templateRefFor(site, { id: b.id, version: b.version ?? "", scope }), store);
       } catch (err) {
         if (err instanceof TemplateNotFound) return json(400, { error: err.message });
         throw err;
       }
 
-      await saveSite(ctx, (s) => { s.template = { id: b.id, version: b.version ?? "" }; });
+      await saveSite(ctx, (s) => { s.template = { id: b.id, version: b.version ?? "", scope }; });
       return json(200, { template: site.template, resolvedVersion: loaded.version });
+    }
+  }
+
+  // ---- static pages: complete documents, published verbatim
+  //
+  // These bypass the content model on purpose. A `page` record is content with
+  // the site's chrome around it; this is for markup the editor cannot express,
+  // published exactly as given.
+  if (head === "static") {
+    const rest = segments.slice(1).join("/");
+
+    if (method === "GET" && !rest) return json(200, { pages: await listStaticPages(store) });
+
+    if (method === "GET" && rest) {
+      const body = await readStaticPage(store, rest);
+      if (body === null) return json(404, { error: `No static page at "${rest}"` });
+      return json(200, { path: rest, body });
+    }
+
+    if (method === "PUT" || method === "POST") {
+      if (!mayAdminister) return json(403, { error: "Only an owner can upload a static page" });
+      const b = asJson();
+      const target = rest || b.path;
+      try {
+        // Slugs are passed in so a static page cannot quietly shadow a post or
+        // page that renders to the same filename.
+        const records = await allArticles(store);
+        const result = await putStaticPage(store, target, b.body, {
+          slugs: records.map((r) => r.slug).filter(Boolean),
+        });
+        return json(201, result);
+      } catch (err) {
+        if (err instanceof StaticPageRejected) return json(400, { error: err.message });
+        throw err;
+      }
+    }
+
+    if (method === "DELETE" && rest) {
+      if (!mayAdminister) return json(403, { error: "Only an owner can delete a static page" });
+      try {
+        return json(200, { path: await removeStaticPage(store, rest) });
+      } catch (err) {
+        if (err instanceof StaticPageRejected) return json(404, { error: err.message });
+        throw err;
+      }
     }
   }
 
   // ---- theme: the customization form and its values
   if (head === "theme") {
-    const template = await loadTemplate(s3, site.template);
+    const template = await loadTemplate(s3, templateRefFor(site), store);
 
     if (method === "GET") {
       return json(200, {

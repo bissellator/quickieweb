@@ -216,6 +216,33 @@
       real content with a template without adopting it, and shows drafts too.</p>
     <ul class="templates" id="templateList"></ul>
 
+    <h2 class="sub">Your own templates</h2>
+    <p class="muted">Uploaded to this site's own storage. No other site can see or
+      use them, and publishing never touches them. Pick the folder that holds
+      <code>template.json</code>; every upload becomes a new version, so the one
+      that was working is still there to go back to.</p>
+    <div class="row">
+      <label class="grow">Template folder
+        <input type="file" id="f-tplfolder" webkitdirectory directory multiple>
+      </label>
+      <button class="btn" id="uploadTemplate" disabled>Upload</button>
+    </div>
+    <p class="muted small" id="uploadMeta"></p>
+    <ul class="templates" id="siteTemplateList"></ul>
+
+    <h2 class="sub">Static pages</h2>
+    <p class="muted">Complete HTML files, published exactly as given, for pages the
+      editor cannot express. They carry none of the site's chrome and are not
+      searchable &mdash; use a static page when you want to own all the markup, and a
+      normal page when you want the template around it.</p>
+    <div class="row">
+      <label class="grow">Path<input id="f-staticpath" placeholder="shop/tees.html"></label>
+      <label class="grow">File<input type="file" id="f-staticfile" accept=".html,.htm,.css,.js,.json,.txt,.xml,.svg"></label>
+      <button class="btn" id="uploadStatic" disabled>Upload</button>
+    </div>
+    <p class="muted small" id="staticMeta"></p>
+    <ul class="templates" id="staticList"></ul>
+
     <div class="previewbox" id="previewBox" hidden>
       <div class="previewhead">
         <span id="previewLabel"></span>

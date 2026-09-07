@@ -209,9 +209,14 @@ export function normalizeSite(raw = {}, { now = new Date().toISOString() } = {})
 
     template: {
       id: str(raw.template?.id, "journal"),
-      // Empty means "whatever the library says is current". A site can pin a
-      // version so a library update cannot change its appearance overnight.
+      // Empty means "whatever is current". A site can pin a version so an
+      // update cannot change its appearance overnight.
       version: str(raw.template?.version),
+      // "library" is the shared platform library; "site" is a template this
+      // site uploaded into its own storage, which no other site can name or
+      // load. Anything unrecognized falls back to the library rather than
+      // failing open into another scope.
+      scope: raw.template?.scope === "site" ? "site" : "library",
     },
     // Token overrides. Validated against the template's manifest at render time,
     // not here: which keys are legal depends on which template is active.

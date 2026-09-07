@@ -195,6 +195,7 @@ infra/                   provisioning and deployment (AWS CLI + SDK, no IaC)
 docs/TEMPLATE-SPEC.md    the template contract
 docs/ADMIN.md            auth model, stats, the editor, the one manual step
 docs/SECURITY.md         the security model, and its known gaps
+docs/MCP.md              connecting an AI client: the design, not yet built
 ```
 
 `shared/` being pure is what lets the CLI and the Lambda produce byte-identical

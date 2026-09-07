@@ -188,6 +188,22 @@ export function storeFor(site) {
    * once copied the site is self-contained: dropping a template version from the
    * library cannot break a site already rendered against it.
    */
+  // A site's own template keeps its webfonts in this same bucket, so putting one
+  // in place is a copy within staging rather than across buckets. Both sides go
+  // through k(), so a `prefix`-driver site cannot name another site's object as
+  // a source.
+  async function copyWithinStaging(sourceKey, targetKey) {
+    await s3.send(new CopyObjectCommand({
+      Bucket: STAGING,
+      Key: k(targetKey),
+      CopySource: `${STAGING}/${encodeURIComponent(k(sourceKey)).replace(/%2F/g, "/")}`,
+      MetadataDirective: "REPLACE",
+      CacheControl: cacheControlFor(targetKey),
+      ContentType: contentTypeFor(targetKey),
+    }));
+    return clean(targetKey);
+  }
+
   async function copyFromPlatform(sourceKey, targetKey) {
     if (!PLATFORM_BUCKET) throw new Error("PLATFORM_BUCKET is not set");
     await s3.send(new CopyObjectCommand({
@@ -284,6 +300,6 @@ export function storeFor(site) {
     STAGING, LIVE, DISTRIBUTION_ID, LOG_BUCKET,
     key: k,
     getBuffer, getText, getJson, putBuffer, putText, putJson,
-    remove, exists, list, copyFromPlatform, computeChangeset, publish,
+    remove, exists, list, copyFromPlatform, copyWithinStaging, computeChangeset, publish,
   };
 }

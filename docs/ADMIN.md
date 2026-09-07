@@ -327,6 +327,9 @@ If you would rather have the old rule back, it is the `accumulateIp` calls in
 
 - `article` — the five-section format
 - `podcast` — adds a plain `<audio>` element and an enclosure in `/podcast.xml`
+- `gallery` — images are pulled out of the body into `post.images` on save, and
+  rendered as a grid with a platform-supplied lightbox
+- `page` — an undated standing page
 
 `podcast.xml` is only written when at least one published article has audio, so
 there is never a zero-item feed failing validation.
@@ -339,8 +342,77 @@ Images are resized by `sharp` in the Lambda into a 1400px webp and a 480px
 thumbnail. The original is deliberately not kept — it is the largest object and
 nothing reads it.
 
-A gallery layout is not built. Adding one means a new layout name in
-`REQUIRED_LAYOUTS`/`OPTIONAL_LAYOUTS` and a matching root in `LAYOUT_ROOTS`.
+### Two shelves: the library, and a site's own
+
+A template comes from one of two places, named by `template.scope` on the site
+record:
+
+| scope | where | who can see it |
+| --- | --- | --- |
+| `library` (default) | `s3://<platform>/templates/<id>/<version>/` | every site in the installation |
+| `site` | `<staging>/_internal/templates/<id>/<version>/` | that site alone |
+
+Both shelves are unreachable by a publish. The library is in neither of a site's
+buckets, and `_internal/` is in `SKIP_PREFIXES` — a private template is source,
+like the article records beside it, not output.
+
+**The validator runs on a private upload exactly as it does on a library
+publish.** A private template is still rendered by the shared Lambda, in the
+process that serves every other tenant; "it only affects my site" is a claim
+about blast radius, not about which interpreter the bytes reach.
+
+**Every upload is a new immutable version.** The manifest's own `version` is
+advisory — the platform assigns the next patch number and stamps it into the
+stored manifest. That keeps `id@version` immutable, which is what lets the
+loader cache safely, and leaves the copy that was working ten minutes ago in
+place to go back to.
+
+**The loader's cache key carries the site for a private template**
+(`site:<siteId>:<id>@<version>`). Two sites can both hold `mytheme@1.0.0`, and a
+Lambda container is reused across invocations, so a key of just `id@version`
+would serve one tenant's template to another. That single line is the isolation.
+
+### Static pages
+
+Complete documents, published verbatim, for markup the editor cannot express — a
+product page, a calculator, a landing page built elsewhere.
+
+    <staging>/_internal/static/<path>   the source, never published
+    <staging>/<path>                    the copy a publish promotes
+
+Both are written on upload, so the page appears in the next changeset rather
+than after the next save. Nothing is templated in and nothing is extracted out:
+no masthead, no theme, no search index entry, no nav slot. A page that owns its
+markup owns all of it — use a `page` record when you want the site's chrome.
+
+Refused at upload: traversal or absolute paths, anything the renderer writes
+itself (`index.html`, `feed.xml`, `assets/`, …), and any path that would shadow
+a post or page rendering to the same filename.
+
+### The API
+
+The console is one client of these, not a privileged path into them — which is
+what lets a script, or an MCP server, drive the same operations. All of them
+take the site from the `X-QW-Site` header and authorize it against membership;
+the write routes need owner rights.
+
+```
+GET    /api/templates                 both shelves: { templates, siteTemplates, active }
+POST   /api/templates                 { files: { "template.json": "…", … } } -> { id, version }
+PUT    /api/templates                 { id, scope, version? } -- adopt one
+DELETE /api/templates/<id>[?version=] drop a private template
+
+GET    /api/static                    { pages: [{ path, size }] }
+GET    /api/static/<path>             { path, body }
+PUT    /api/static/<path>             { body: "<!doctype html>…" }
+DELETE /api/static/<path>
+```
+
+A template package is posted as a `{ path: text }` map rather than an archive:
+templates are text, the browser can build one from a folder picker, and
+unpacking a zip server-side would mean either a dependency in a repo that has
+none or hand-rolling an archive parser over uploaded bytes. A rejected upload
+answers `400` with the validator's `findings`, each carrying a file and a line.
 
 ## Local development
 

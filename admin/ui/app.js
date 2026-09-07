@@ -1178,23 +1178,33 @@ async function loadDesign() {
   $("themeForm").innerHTML = "";
 
   const [catalog, theme] = await Promise.all([auth.api("/templates"), auth.api("/theme")]);
+  await loadStaticPages();
   const active = catalog.active ?? {};
 
+  // An id can exist on both shelves, so "in use" is a match on id AND scope --
+  // otherwise adopting your own `journal` would light up the library's too.
+  const renderTemplate = (t, scope) => {
+    const on = t.id === active.id && (active.scope ?? "library") === scope;
+    return `<li class="tpl${on ? " is-on" : ""}">
+      <div>
+        <p class="tpl-name">${esc(t.name)} <span class="muted small">${esc(t.latest ?? "")}</span></p>
+        <p class="muted small">${esc(t.description ?? "")}</p>
+      </div>
+      <span class="tpl-actions">
+        <button class="btn small" data-preview="${esc(t.id)}" data-scope="${scope}">Preview</button>
+        <button class="btn" data-template="${esc(t.id)}" data-scope="${scope}"${on ? " disabled" : ""}>${on ? "In use" : "Use this"}</button>
+        ${scope === "site" ? `<button class="btn small danger" data-delete-template="${esc(t.id)}"${on ? " disabled" : ""}>Delete</button>` : ""}
+      </span>
+    </li>`;
+  };
+
   $("templateList").innerHTML = (catalog.templates ?? []).length
-    ? catalog.templates.map((t) => {
-        const on = t.id === active.id;
-        return `<li class="tpl${on ? " is-on" : ""}">
-          <div>
-            <p class="tpl-name">${esc(t.name)} <span class="muted small">${esc(t.latest ?? "")}</span></p>
-            <p class="muted small">${esc(t.description ?? "")}</p>
-          </div>
-          <span class="tpl-actions">
-            <button class="btn small" data-preview="${esc(t.id)}">Preview</button>
-            <button class="btn" data-template="${esc(t.id)}"${on ? " disabled" : ""}>${on ? "In use" : "Use this"}</button>
-          </span>
-        </li>`;
-      }).join("")
+    ? catalog.templates.map((t) => renderTemplate(t, "library")).join("")
     : '<li class="muted">The library is empty. Publish one with: node cli/templates.mjs publish &lt;dir&gt;</li>';
+
+  $("siteTemplateList").innerHTML = (catalog.siteTemplates ?? []).length
+    ? catalog.siteTemplates.map((t) => renderTemplate(t, "site")).join("")
+    : '<li class="muted">Nothing uploaded yet.</li>';
 
   const fields = theme.groups.reduce((n, g) => n + g.fields.length, 0);
   $("themeFor").textContent = `${theme.template.name} ${theme.template.version} - ${fields} setting(s).`;
@@ -1301,7 +1311,7 @@ $("themeForm").addEventListener("click", (ev) => {
 // asset inside the preview is written relative, so the browser carries the token
 // to the stylesheet and the images without us doing anything -- which is the
 // whole reason the renderer emits relative URLs.
-$("templateList").addEventListener("click", async (ev) => {
+async function onTemplateClick(ev) {
   const previewId = ev.target.dataset?.preview;
   if (previewId) {
     ev.target.disabled = true;
@@ -1309,7 +1319,8 @@ $("templateList").addEventListener("click", async (ev) => {
     try {
       const res = await auth.api("/preview", {
         method: "POST",
-        body: JSON.stringify({ siteId: auth.getSite(), templateId: previewId }),
+        body: JSON.stringify({ siteId: auth.getSite(), templateId: previewId,
+          templateScope: ev.target.dataset.scope }),
       });
       $("previewLabel").textContent =
         `${previewId} - live content, drafts included. Link expires in ${Math.round(res.ttlSeconds / 60)} minutes.`;
@@ -1335,14 +1346,23 @@ $("templateList").addEventListener("click", async (ev) => {
   ev.target.disabled = true;
   ev.target.textContent = "Switching...";
   try {
-    await auth.api("/templates", { method: "PUT", body: JSON.stringify({ id }) });
+    await auth.api("/templates", {
+      method: "PUT",
+      body: JSON.stringify({ id, scope: ev.target.dataset.scope }),
+    });
     await loadDesign();
   } catch (e) {
     err($("designErr"), e.message);
     ev.target.disabled = false;
     ev.target.textContent = "Use this";
   }
-});
+}
+
+// Both shelves render the same buttons, so both get the same handler. Binding
+// it only to the library list is how the site's own templates end up with a
+// Preview button that silently does nothing.
+$("templateList").addEventListener("click", onTemplateClick);
+$("siteTemplateList").addEventListener("click", onTemplateClick);
 
 $("previewClose").addEventListener("click", () => {
   // Drop the src as well as hiding it: an iframe left loaded keeps a live
@@ -1380,3 +1400,167 @@ $("saveTheme").addEventListener("click", async () => {
 setInterval(() => { if (dirty) saveLocalDraft(); }, 5000);
 
 boot().catch((e) => err($("gateErr"), e.message));
+
+// ---- private templates: upload a folder into this site's own storage
+//
+// The folder picker gives us File objects with a webkitRelativePath like
+// "mytheme/layouts/index.html". The first segment is the folder the user
+// chose, so it is stripped: the package's own paths start at template.json.
+//
+// Text is read here and POSTed as a { path: text } map rather than an archive.
+// Unpacking a zip server-side would mean either a dependency in a repo that has
+// none, or hand-rolling an archive parser over uploaded bytes. The same shape is
+// what a script or an MCP client posts, so the console is one client of the API
+// rather than a privileged path into it.
+const TEMPLATE_FILE_RE = /\.(json|html|css|txt|md)$/i;
+const MAX_TEMPLATE_BYTES = 2 * 1024 * 1024;
+
+let pendingTemplate = null;
+
+$("f-tplfolder").addEventListener("change", async (ev) => {
+  err($("designErr"), null);
+  pendingTemplate = null;
+  $("uploadTemplate").disabled = true;
+
+  const picked = [...(ev.target.files ?? [])];
+  if (!picked.length) return ($("uploadMeta").textContent = "");
+
+  // Everything under the chosen folder, minus the folder name itself.
+  const strip = (f) => (f.webkitRelativePath || f.name).split("/").slice(1).join("/");
+  const wanted = picked.filter((f) => TEMPLATE_FILE_RE.test(f.name) && !f.name.startsWith("."));
+
+  if (!wanted.some((f) => strip(f) === "template.json")) {
+    $("uploadMeta").textContent = "";
+    return err($("designErr"),
+      "No template.json at the top of that folder. Pick the folder that contains it, not its parent.");
+  }
+
+  const total = wanted.reduce((n, f) => n + f.size, 0);
+  if (total > MAX_TEMPLATE_BYTES) {
+    return err($("designErr"),
+      `That package is ${Math.round(total / 1024)}KB. Templates are text; anything this big is ` +
+      "probably a folder of images, which belong in the media library.");
+  }
+
+  const files = {};
+  for (const f of wanted) files[strip(f)] = await f.text();
+  pendingTemplate = files;
+
+  const names = Object.keys(files);
+  $("uploadMeta").textContent =
+    `${names.length} file(s), ${Math.round(total / 1024)}KB: ${names.slice(0, 6).join(", ")}` +
+    (names.length > 6 ? ", ..." : "");
+  $("uploadTemplate").disabled = false;
+});
+
+$("uploadTemplate").addEventListener("click", async () => {
+  if (!pendingTemplate) return;
+  err($("designErr"), null);
+  const btn = $("uploadTemplate");
+  btn.disabled = true;
+  btn.textContent = "Uploading...";
+  try {
+    const res = await auth.api("/templates", {
+      method: "POST",
+      body: JSON.stringify({ files: pendingTemplate }),
+    });
+    $("uploadMeta").textContent = `Uploaded ${res.id} ${res.version}.`;
+    $("f-tplfolder").value = "";
+    pendingTemplate = null;
+    await loadDesign();
+  } catch (e) {
+    // The server returns the validator's findings; showing the first few with
+    // their file and line is the difference between "invalid" and a fix.
+    const findings = e.findings ?? e.body?.findings;
+    err($("designErr"), Array.isArray(findings) && findings.length
+      ? `${e.message}\n` + findings.filter((f) => f.level === "error").slice(0, 6)
+          .map((f) => `  ${f.file}:${f.line}  ${f.message}`).join("\n")
+      : e.message);
+  } finally {
+    btn.textContent = "Upload";
+    btn.disabled = !pendingTemplate;
+  }
+});
+
+// Delete is delegated from the same list the templates render into.
+$("siteTemplateList").addEventListener("click", async (ev) => {
+  const id = ev.target.dataset?.deleteTemplate;
+  if (!id) return;
+  if (!confirm(`Delete "${id}" and every version of it?\n\nThis cannot be undone.`)) return;
+  err($("designErr"), null);
+  try {
+    await auth.api(`/templates/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await loadDesign();
+  } catch (e) {
+    err($("designErr"), e.message);
+  }
+});
+
+// ---- static pages: complete documents, uploaded and published verbatim
+//
+// The path is asked for rather than taken from the filename: where a page lands
+// is a decision about the site's URLs, and a file called `Untitled (3).html`
+// should not get to make it.
+let pendingStatic = null;
+
+$("f-staticfile").addEventListener("change", async (ev) => {
+  err($("designErr"), null);
+  const file = ev.target.files?.[0];
+  pendingStatic = file ? await file.text() : null;
+  if (file && !$("f-staticpath").value.trim()) $("f-staticpath").value = file.name;
+  $("staticMeta").textContent = file ? `${file.name}, ${Math.round(file.size / 1024)}KB` : "";
+  $("uploadStatic").disabled = !pendingStatic;
+});
+
+$("uploadStatic").addEventListener("click", async () => {
+  const path = $("f-staticpath").value.trim();
+  if (!path || !pendingStatic) return;
+  err($("designErr"), null);
+  const btn = $("uploadStatic");
+  btn.disabled = true;
+  btn.textContent = "Uploading...";
+  try {
+    const res = await auth.api(`/static/${path.split("/").map(encodeURIComponent).join("/")}`, {
+      method: "PUT",
+      body: JSON.stringify({ body: pendingStatic }),
+    });
+    $("staticMeta").textContent = `Uploaded ${res.path}. Publish to put it live.`;
+    $("f-staticfile").value = "";
+    $("f-staticpath").value = "";
+    pendingStatic = null;
+    await loadStaticPages();
+  } catch (e) {
+    err($("designErr"), e.message);
+  } finally {
+    btn.textContent = "Upload";
+    btn.disabled = !pendingStatic;
+  }
+});
+
+async function loadStaticPages() {
+  const { pages } = await auth.api("/static");
+  $("staticList").innerHTML = pages.length
+    ? pages.map((p) => `<li class="tpl">
+        <div>
+          <p class="tpl-name">${esc(p.path)}</p>
+          <p class="muted small">${Math.round((p.size ?? 0) / 1024) || 1}KB</p>
+        </div>
+        <span class="tpl-actions">
+          <button class="btn small danger" data-delete-static="${esc(p.path)}">Delete</button>
+        </span>
+      </li>`).join("")
+    : '<li class="muted">No static pages.</li>';
+}
+
+$("staticList").addEventListener("click", async (ev) => {
+  const path = ev.target.dataset?.deleteStatic;
+  if (!path) return;
+  if (!confirm(`Delete "${path}"?\n\nIt stays live until the next publish.`)) return;
+  err($("designErr"), null);
+  try {
+    await auth.api(`/static/${path.split("/").map(encodeURIComponent).join("/")}`, { method: "DELETE" });
+    await loadStaticPages();
+  } catch (e) {
+    err($("designErr"), e.message);
+  }
+});

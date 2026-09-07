@@ -207,6 +207,15 @@ export async function api(path, opts = {}, retry = true) {
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
-  if (!res.ok) throw new AuthError(data?.error ?? `HTTP ${res.status}`);
+  if (!res.ok) {
+    // Carry the body, not just its message. A rejected template upload answers
+    // with the validator's findings, and dropping them here would turn "line 12
+    // of layouts/article.html" into "400".
+    const err = new AuthError(data?.error ?? `HTTP ${res.status}`);
+    err.status = res.status;
+    err.body = data;
+    err.findings = data?.findings;
+    throw err;
+  }
   return data;
 }

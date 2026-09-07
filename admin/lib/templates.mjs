@@ -1,38 +1,40 @@
-// Loading template packages out of the platform bucket.
+// The S3 half of template loading: the platform-bucket reader, the catalog, and
+// the cache. Everything that does not need an SDK -- assembling a package,
+// validating an upload, versioning it -- lives in shared/template/library.mjs
+// so it is testable without one and identical wherever it runs.
 //
-// The library is deliberately NOT in a site's content buckets. It is shared
-// across every site in the installation, it is never published, and publish()
-// must never be able to reach it -- a site's changeset compares its own staging
-// against its own live, and the library is in neither.
+//   library   s3://<platform>/templates/<id>/<version>/   shared, read-only here
+//   site      <staging>/_internal/templates/<id>/<v>/     one site's own uploads
 //
-//   templates/index.json                     the catalog
-//   templates/<id>/<version>/template.json   a package
-//   templates/<id>/<version>/layouts/…
-//
-// Versions are immutable. A site pinned to journal@1.2.0 renders the same bytes
-// next year; "latest" is resolved through the catalog at load time, so a site
-// that has not pinned follows the library forward on purpose rather than by
-// accident.
+// The library is deliberately NOT in a site's content buckets: publish()
+// compares a site's own staging against its own live, and the library is in
+// neither, so no changeset however wrong can reach it. Private templates get
+// the same protection from `_internal/` being in SKIP_PREFIXES.
 
 import { GetObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
-import { checkManifest, compileTemplate, manifestFiles } from "../../shared/template/manifest.mjs";
+import {
+  siteReader, loadFromReader, libraryPrefixFor, VERSION_RE, TemplateNotFound,
+} from "../../shared/template/library.mjs";
 
 const PLATFORM = process.env.PLATFORM_BUCKET ?? "";
 
 // A Lambda container is reused across invocations, and a rebuild renders every
 // page of a site. Without this, one save would re-fetch the same eight template
-// files once per page. Keyed by id@version, which is immutable, so a cache entry
-// can never be stale -- only evicted with the container.
+// files once per page.
+//
+// The key MUST carry the site for a private template. Two sites can both hold
+// `mytheme@1.0.0`, and a key of just id@version would serve one tenant's
+// template to another out of a warm container -- the worst thing this file
+// could do. Library ids are globally unique within an installation, so those
+// key on id@version alone.
 const cache = new Map();
 const MAX_CACHED = 8;
 
-export class TemplateNotFound extends Error {
-  constructor(message) { super(message); this.name = "TemplateNotFound"; this.status = 503; }
-}
+const cacheKeyFor = (ref, resolved) => ref?.scope === "site"
+  ? `site:${ref.siteId}:${ref.id}@${resolved ?? ""}`
+  : `lib:${ref.id}@${resolved ?? ""}`;
 
-const prefixFor = (id, version) => `templates/${id}/${version}/`;
-
-async function getText(s3, key) {
+async function platformGetText(s3, key) {
   try {
     const res = await s3.send(new GetObjectCommand({ Bucket: PLATFORM, Key: key }));
     const chunks = [];
@@ -44,10 +46,27 @@ async function getText(s3, key) {
   }
 }
 
+function libraryReader(s3) {
+  return {
+    scope: "library",
+    where: `s3://${PLATFORM}/templates/`,
+    prefixFor: libraryPrefixFor,
+    getText: (key) => platformGetText(s3, key),
+    async versions(id) {
+      const res = await s3.send(new ListObjectsV2Command({
+        Bucket: PLATFORM, Prefix: `templates/${id}/`, Delimiter: "/",
+      }));
+      return (res.CommonPrefixes ?? [])
+        .map((p) => p.Prefix.slice(`templates/${id}/`.length).replace(/\/$/, ""))
+        .filter((v) => VERSION_RE.test(v));
+    },
+  };
+}
+
 /** The library catalog, or an empty one when the bucket has no index yet. */
 export async function readCatalog(s3) {
   if (!PLATFORM) return { templates: [] };
-  const text = await getText(s3, "templates/index.json");
+  const text = await platformGetText(s3, "templates/index.json");
   if (!text) return { templates: [] };
   try {
     return JSON.parse(text);
@@ -58,75 +77,47 @@ export async function readCatalog(s3) {
   }
 }
 
-/** Highest version present for an id, by listing the prefix. */
-async function latestVersion(s3, id) {
-  const res = await s3.send(new ListObjectsV2Command({
-    Bucket: PLATFORM, Prefix: `templates/${id}/`, Delimiter: "/",
-  }));
-  const versions = (res.CommonPrefixes ?? [])
-    .map((p) => p.Prefix.slice(`templates/${id}/`.length).replace(/\/$/, ""))
-    .filter((v) => /^\d+\.\d+\.\d+/.test(v));
-  if (!versions.length) return null;
-  // Numeric compare, so 1.10.0 sorts above 1.9.0.
-  return versions.sort((a, b) => {
-    const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
-    return (pb[0] - pa[0]) || (pb[1] - pa[1]) || (pb[2] - pa[2]);
-  })[0];
-}
-
 /**
  * Load and compile a template package.
- * @param ref { id, version } -- an empty version means "whatever is latest"
+ *
+ * @param ref   { id, version, scope, siteId } -- empty version means "latest"
+ * @param store the site's store, required for scope "site"
  */
-export async function loadTemplate(s3, { id, version }) {
-  if (!PLATFORM) {
+export async function loadTemplate(s3, ref, store = null) {
+  const site = ref?.scope === "site";
+  if (site && !store) throw new TemplateNotFound(`Loading "${ref?.id}" needs the site's store`);
+  if (!site && !PLATFORM) {
     throw new TemplateNotFound(
       "PLATFORM_BUCKET is not set on this function, so the template library is unreachable. " +
       "Run infra/provision-platform.mjs and redeploy.");
   }
 
-  const resolved = version || (await latestVersion(s3, id));
-  if (!resolved) throw new TemplateNotFound(`No template "${id}" in s3://${PLATFORM}/templates/`);
+  const reader = site ? siteReader(store, ref.siteId) : libraryReader(s3);
+  // Resolve first so the cache key names a concrete version: "latest" must not
+  // become a cache entry, or a new upload would be invisible until the
+  // container recycled.
+  const resolved = ref.version || (await reader.versions(ref.id)).sort(
+    (a, b) => {
+      const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
+      return (pb[0] - pa[0]) || (pb[1] - pa[1]) || (pb[2] - pa[2]);
+    })[0];
+  if (!resolved) throw new TemplateNotFound(`No template "${ref.id}" in ${reader.where}`);
 
-  const cacheKey = `${id}@${resolved}`;
-  if (cache.has(cacheKey)) return cache.get(cacheKey);
-
-  const prefix = prefixFor(id, resolved);
-  const manifestText = await getText(s3, `${prefix}template.json`);
-  if (!manifestText) throw new TemplateNotFound(`No template.json for ${cacheKey}`);
-
-  const { manifest, problems } = checkManifest(JSON.parse(manifestText));
-  if (problems.length) {
-    throw new TemplateNotFound(`${cacheKey} has an invalid manifest: ${problems.join("; ")}`);
-  }
-
-  // Only the files the manifest names. A package cannot make the Lambda fetch
-  // anything it did not declare, and nothing outside its own version prefix.
-  const sources = { "template.json": manifestText };
-  await Promise.all(manifestFiles(manifest).map(async (rel) => {
-    const text = await getText(s3, `${prefix}${rel}`);
-    if (text !== null) sources[rel] = text;
-  }));
-
-  const pkg = compileTemplate(manifest, sources);
-  if (pkg.missing.length || pkg.errors.length) {
-    throw new TemplateNotFound(
-      `${cacheKey} did not compile: ${[...pkg.missing, ...pkg.errors].join("; ")}`);
-  }
-
-  // `sources` is kept, not discarded: renderSite emits a template's own
-  // stylesheet as part of the file set, and a preview has no bucket to copy it
-  // from. These bytes were already fetched to compile the layouts.
-  const loaded = { ...pkg, sources, version: resolved, prefix };
   if (cache.size >= MAX_CACHED) cache.delete(cache.keys().next().value);
-  cache.set(cacheKey, loaded);
-  return loaded;
+  return loadFromReader(reader, { id: ref.id, version: resolved }, cache, cacheKeyFor(ref, resolved));
+}
+
+/** Drop cached copies of one site's template, after an upload or a delete. */
+export function evictSiteTemplate(siteId, id) {
+  for (const key of [...cache.keys()]) {
+    if (key.startsWith(`site:${siteId}:${id}@`)) cache.delete(key);
+  }
 }
 
 /**
  * Template assets that renderSite CANNOT emit, for copying server-side into a
  * site's staging bucket. That is webfonts and nothing else: they are binary, and
- * this loader reads package files as UTF-8 text, which would corrupt them.
+ * the loader reads package files as UTF-8 text, which would corrupt them.
  *
  * Stylesheets and scripts are deliberately NOT here any more. They are text, so
  * renderSite includes them in the file set directly -- which is what makes a
@@ -134,11 +125,18 @@ export async function loadTemplate(s3, { id, version }) {
  */
 export function assetKeysFor(template) {
   const m = template.manifest;
-  const rels = (m.webfonts ?? []).map((f) => f.src);
-  return rels.map((rel) => ({
+  return (m.webfonts ?? []).map((f) => f.src).map((rel) => ({
     source: `${template.prefix}${rel}`,
     target: `assets/${rel.split("/").pop()}`,
+    // A library font is copied across buckets; a site's own font already lives
+    // in this bucket and only needs moving into place.
+    scope: template.scope ?? "library",
   }));
 }
+
+export {
+  TemplateNotFound, TemplateRejected, SITE_TEMPLATE_PREFIX,
+  putSiteTemplate, listSiteTemplates, removeSiteTemplate, nextVersionFor,
+} from "../../shared/template/library.mjs";
 
 export { PLATFORM };
