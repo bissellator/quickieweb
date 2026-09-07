@@ -22,11 +22,11 @@
 <header class="bar">
   <span class="brand" id="brand"><em>admin</em></span>
   <nav class="tabs" hidden id="tabs">
-    <button class="tab is-on" data-view="articles">Articles</button>
-    <button class="tab" data-view="design">Design</button>
-    <button class="tab" data-view="stats">Stats</button>
-    <button class="tab" data-view="admins">People</button>
-    <button class="tab" data-view="publish">Publish</button>
+    <button data-needs-site class="tab is-on" data-view="articles">Articles</button>
+    <button data-needs-site class="tab" data-view="design">Design</button>
+    <button data-needs-site class="tab" data-view="stats">Stats</button>
+    <button data-needs-site class="tab" data-view="admins">People</button>
+    <button data-needs-site class="tab" data-view="publish">Publish</button>
     <button class="tab" data-view="ai">Build with AI</button>
   </nav>
   <span class="siteswitch" id="siteSwitch" hidden>
@@ -40,6 +40,7 @@
 </header>
 
 <main id="main">
+  <p class="err" id="globalErr" hidden></p>
 
   <!-- signed out. Shown ONLY when there is no session: reusing this panel to
        carry an app-level message put a "Sign in with Google" button in front of

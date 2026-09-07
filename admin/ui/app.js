@@ -5,8 +5,19 @@
 import * as auth from "./auth.js";
 
 const $ = (id) => document.getElementById(id);
-const show = (el, on = true) => { el.hidden = !on; };
-const err = (el, msg) => { el.textContent = msg ?? ""; show(el, Boolean(msg)); };
+// Tolerant of a missing element on purpose. These are called in loops over
+// lists of ids, and one stale id used to throw halfway through -- leaving every
+// view hidden and the console blank, which reads as "the tool is broken" rather
+// than "one panel is missing". Warn loudly, carry on.
+const show = (el, on = true) => {
+  if (!el) return console.warn("show(): no such element");
+  el.hidden = !on;
+};
+const err = (el, msg) => {
+  if (!el) return console.warn("err():", msg);
+  el.textContent = msg ?? "";
+  show(el, Boolean(msg));
+};
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -20,6 +31,21 @@ const ALL_VIEWS = ["gate", "emptyView", "articlesView", "editorView", "designVie
  */
 function hideAll() {
   for (const id of [...ALL_VIEWS, "tabs", "siteSwitch"]) show($(id), false);
+}
+
+/**
+ * Most of the console is meaningless without a site: every one of those tabs
+ * calls an API that answers "No site selected" with a 400. Showing them anyway
+ * turns a clear empty state into five different error messages.
+ *
+ * "Build with AI" is the exception and stays available -- it explains how to get
+ * a site's design built, which is exactly what someone with nothing yet wants.
+ */
+function setTabsForSite(hasSite) {
+  show($("tabs"), true);
+  for (const t of document.querySelectorAll(".tab")) {
+    show(t, hasSite || !t.hasAttribute("data-needs-site"));
+  }
 }
 
 let me = null;
@@ -77,7 +103,7 @@ async function onAuthChange(profile, message) {
   // saying so plainly beats an empty console with no explanation.
   if (!(await loadSites())) return;
 
-  show($("tabs"), true);
+  setTabsForSite(true);
   await loadTaxonomy();
   switchView("articles");
 }
@@ -100,6 +126,9 @@ async function loadSites() {
       : `You are signed in as ${me.email}, but you are not a member of any site. `
         + "Ask an owner of the site you need to add your address on its People tab.";
     show($("emptyView"), true);
+    // Not hideAll's blank screen: leave the tabs bar up with only what works
+    // without a site, so there is somewhere to go from here.
+    setTabsForSite(false);
     // Staff still need the button; the empty selector beside it would only be a
     // dropdown with nothing in it, so it stays hidden until there is a choice.
     show($("siteSelect"), false);
@@ -184,25 +213,61 @@ async function loadTaxonomy() {
 }
 
 // -------------------------------------------------------------------- views
+// A tab's view is `<name>View`, by convention rather than by a lookup table.
+// The table this replaces was a second list to keep in step with ALL_VIEWS and
+// the markup, and adding a tab without an entry in it hid every view and then
+// threw -- which is exactly what happened when the AI tab was added.
+const LOADERS = {
+  articles: () => loadArticles(),
+  design: () => loadDesign(),
+  admins: () => loadAdmins(),
+  publish: () => loadChangeset(),
+  stats: () => loadStats(),
+  ai: () => loadContract(),
+};
+
 function switchView(name) {
-  const map = { articles: "articlesView", design: "designView", admins: "adminsView",
-    publish: "publishView", stats: "statsView" };
+  const view = $(`${name}View`);
+  if (!view) return console.warn(`switchView: no view for "${name}"`);
+
   for (const id of ALL_VIEWS) show($(id), false);
-  show($(map[name]), true);
+  show(view, true);
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("is-on", t.dataset.view === name));
-  if (name === "articles") loadArticles();
-  if (name === "design") loadDesign();
-  if (name === "admins") loadAdmins();
-  if (name === "publish") loadChangeset();
-  if (name === "stats") loadStats();
-  if (name === "ai") loadContract();
+
+  // A loader that throws must not take the view down with it: the panel is
+  // already on screen, so report into it and leave the rest of the console
+  // usable.
+  Promise.resolve()
+    .then(LOADERS[name] ?? (() => {}))
+    .catch((e) => {
+      console.error(`${name} failed to load`, e);
+      err($("globalErr"), `Could not load ${name}: ${e.message}`);
+    });
 }
 
 document.querySelectorAll(".tab").forEach((t) =>
   t.addEventListener("click", () => {
     if (dirty && !confirm("You have unsaved changes. Leave anyway?")) return;
-    switchView(t.dataset.view);
+    err($("globalErr"), null);
+    try {
+      switchView(t.dataset.view);
+    } catch (e) {
+      console.error(e);
+      err($("globalErr"), `Something went wrong opening that tab: ${e.message}`);
+    }
   }));
+
+// Anything that escapes everywhere else. Without this the only sign of a bug is
+// a console line nobody has open, and a screen that quietly stopped responding.
+window.addEventListener("error", (e) => {
+  err($("globalErr"), `Something went wrong: ${e.message ?? "unknown error"}`);
+});
+window.addEventListener("unhandledrejection", (e) => {
+  const m = e.reason?.message ?? String(e.reason ?? "unknown error");
+  // An expired session is a normal end to a working day, not a crash.
+  if (/session|sign in|401/i.test(m)) return;
+  err($("globalErr"), `Something went wrong: ${m}`);
+});
 $("signOut").addEventListener("click", () => auth.signOut());
 
 // Browsers only honour this if the page has been interacted with, which by the
