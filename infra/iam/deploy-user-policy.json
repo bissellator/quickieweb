@@ -81,6 +81,18 @@
       "Resource": "*"
     },
     {
+      "Sid": "EdgeAccessStore",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:CreateKeyValueStore",
+        "cloudfront:DescribeKeyValueStore",
+        "cloudfront-keyvaluestore:DescribeKeyValueStore",
+        "cloudfront-keyvaluestore:GetKey",
+        "cloudfront-keyvaluestore:PutKey"
+      ],
+      "Resource": "arn:aws:cloudfront::*:key-value-store/*"
+    },
+    {
       "Sid": "CertificatesAndDns",
       "Effect": "Allow",
       "Action": [

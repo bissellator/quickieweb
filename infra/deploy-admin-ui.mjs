@@ -71,8 +71,10 @@ function run(cmd, args) {
   });
 }
 
+// Microsoft is optional: an empty id simply hides its sign-in button.
+const microsoftClientId = config.deploy.microsoftClientId ?? "";
 const clientConfig = () =>
-  JSON.stringify({ googleClientId, siteName: CONSOLE_NAME, generatedAt: new Date().toISOString() }, null, 2);
+  JSON.stringify({ googleClientId, microsoftClientId, siteName: CONSOLE_NAME, generatedAt: new Date().toISOString() }, null, 2);
 
 if (LOCAL) {
   const dest = path.join(ROOT, "admin", "ui", "config.json");

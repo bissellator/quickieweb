@@ -49,6 +49,9 @@ const DIST = config.deploy.distributionId;
 const PLATFORM = config.deploy.platformBucket ?? "";
 const LOGS = config.hosted?.tenantLogBucket ?? config.deploy.logBucket ?? "";
 const FN = config.deploy.functionName || "qw-admin";
+// Empty until infra/provision-access.mjs has run; every public site works
+// without it, and the function refuses to protect one until it is set.
+const ACCESS_KVS_ARN = config.hosted?.accessKvsArn ?? "";
 const ROLE = `${FN}-role`;
 const ZIP = path.join(ROOT, "infra", `${FN}.zip`);
 
@@ -194,6 +197,20 @@ const inline = {
       Resource: [...new Set([DIST, config.hosted?.distributionId].filter(Boolean))]
         .map((d) => `arn:aws:cloudfront::${ACCOUNT}:distribution/${d}`),
     },
+    // The edge access store (infra/provision-access.mjs): who may read which
+    // page. Exactly one store, and only the calls admin/lib/access-edge.mjs
+    // makes -- it reads the signing secret and writes levels, and cannot create,
+    // delete or re-associate a store.
+    ...(ACCESS_KVS_ARN ? [{
+      Sid: "EdgeAccessStore",
+      Effect: "Allow",
+      Action: [
+        "cloudfront-keyvaluestore:DescribeKeyValueStore",
+        "cloudfront-keyvaluestore:GetKey",
+        "cloudfront-keyvaluestore:UpdateKeys",
+      ],
+      Resource: ACCESS_KVS_ARN,
+    }] : []),
   ],
 };
 await aws(["iam", "put-role-policy", "--role-name", ROLE,
@@ -259,6 +276,11 @@ const env = {
     TENANT_DISTRIBUTION_DOMAIN: config.hosted?.distributionDomain ?? "",
     TENANT_LOG_BUCKET: config.hosted?.tenantLogBucket ?? "",
     GOOGLE_CLIENT_ID: CLIENT_ID,
+    // Optional. Empty turns Microsoft sign-in off; see docs/ADMIN.md.
+    MICROSOFT_CLIENT_ID: config.deploy.microsoftClientId ?? "",
+    // The edge access store. The signing secret lives IN the store, read at
+    // run time, so it is never in this environment or in config.json.
+    ACCESS_KVS_ARN,
     SESSION_SECRET,
     ORIGIN_SECRET,
     ORIGIN_ENFORCE,

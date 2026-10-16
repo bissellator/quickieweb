@@ -183,21 +183,26 @@ test("a suspended site grants nothing, including to its owner", () => {
 });
 
 test("role capabilities", () => {
-  assert.ok(canEdit("owner") && canEdit("editor"));
+  assert.ok(canEdit("owner") && canEdit("admin") && canEdit("editor"));
+  assert.ok(!canEdit("viewer"), "a viewer reads the published site and never reaches the console");
   assert.ok(!canEdit(null) && !canEdit("staff"));
-  assert.ok(canAdminister("owner"));
-  assert.ok(!canAdminister("editor"));
+  assert.ok(canAdminister("owner") && canAdminister("admin"));
+  assert.ok(!canAdminister("editor") && !canAdminister("viewer"));
 });
 
 test("member lists are deduped, case-folded and role-checked", () => {
   const members = normalizeMembers([
     { email: "A@E.com", role: "owner" },
     { email: "a@e.com", role: "editor" },   // duplicate, dropped
-    { email: "b@e.com", role: "wizard" },   // unknown role -> editor
+    // Unknown role -> viewer, the weakest. It used to become editor, which was
+    // safe only while editor was the floor; now a typo would hand out the console.
+    { email: "b@e.com", role: "wizard" },
+    { email: "c@e.com", role: "admin" },
     { email: "not-an-email", role: "owner" },
     null,
   ]);
-  assert.deepEqual(members.map((m) => [m.email, m.role]), [["a@e.com", "owner"], ["b@e.com", "editor"]]);
+  assert.deepEqual(members.map((m) => [m.email, m.role]),
+    [["a@e.com", "owner"], ["b@e.com", "viewer"], ["c@e.com", "admin"]]);
 });
 
 test("a site cannot be left ownerless", () => {

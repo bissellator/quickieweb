@@ -11,7 +11,16 @@
 //
 // Pure: no filesystem, no S3, no network.
 
-export const SITE_ROLES = ["owner", "editor"];
+// Strongest first. `owner` is `admin` plus the rule that a site always keeps at
+// least one; `viewer` may read a protected site and nothing more -- no console,
+// no API, no drafts.
+export const SITE_ROLES = ["owner", "admin", "editor", "viewer"];
+
+// Who may READ a published page, weakest first. A site has a default level and
+// any page or post may set its own. Each level admits everyone at or above it,
+// so a `viewer` page is readable by viewers, editors and admins but not the
+// public. Enforced at the edge (infra/edge/tenant-router.js); decided here.
+export const ACCESS_LEVELS = ["public", "viewer", "editor", "admin"];
 export const PLATFORM_ROLES = ["user", "staff"];
 export const STORAGE_DRIVERS = ["buckets", "prefix"];
 
@@ -165,7 +174,10 @@ export function normalizeMembers(raw) {
     seen.add(email);
     out.push({
       email,
-      role: SITE_ROLES.includes(m.role) ? m.role : "editor",
+      // An unrecognised role becomes the weakest one. Defaulting to "editor"
+      // was safe while editor was the floor; with viewers below it, a typo would
+      // have quietly handed out the console.
+      role: SITE_ROLES.includes(m.role) ? m.role : "viewer",
       name: str(m.name),
       added: str(m.added, new Date().toISOString()),
     });
@@ -224,6 +236,27 @@ export function normalizeSite(raw = {}, { now = new Date().toISOString() } = {})
 
     storage: normalizeStorage(raw.storage),
     members: normalizeMembers(raw.members),
+    access: normalizeSiteAccess(raw.access),
+  };
+}
+
+/**
+ * Who may read the site by default, and what the edge store was last told.
+ *
+ * `edge` is bookkeeping, not policy: the policy is `default` here plus each
+ * record's own `access`. It is what shared/access-plan.mjs diffs against, so a
+ * sync can delete keys that no longer apply without listing the whole store.
+ */
+export function normalizeSiteAccess(raw) {
+  const a = raw && typeof raw === "object" ? raw : {};
+  const edge = a.edge && typeof a.edge === "object" ? a.edge : {};
+  const paths = {};
+  for (const [p, l] of Object.entries(edge.paths ?? {})) {
+    if (typeof p === "string" && p.startsWith("/") && ACCESS_LEVELS.includes(l)) paths[p] = l;
+  }
+  return {
+    default: ACCESS_LEVELS.includes(a.default) ? a.default : "public",
+    edge: { site: ACCESS_LEVELS.includes(edge.site) ? edge.site : null, paths },
   };
 }
 
@@ -348,8 +381,61 @@ export function roleInSite(email, siteRecord) {
   return siteRecord.members.find((m) => m.email === addr)?.role ?? null;
 }
 
-export const canEdit = (role) => role === "owner" || role === "editor";
-export const canAdminister = (role) => role === "owner";
+/** May use the console and the API on this site: everyone but a viewer. */
+export const canEdit = (role) => role === "owner" || role === "admin" || role === "editor";
+/** May change settings, members, templates and security. */
+export const canAdminister = (role) => role === "owner" || role === "admin";
+
+/**
+ * The reading level a role carries. Platform staff read as admins, matching
+ * what authorizeSite already lets them do in the console; anyone else who is
+ * not a member reads as the public.
+ */
+export function levelForRole(role) {
+  if (role === "owner" || role === "admin" || role === "staff") return "admin";
+  if (role === "editor") return "editor";
+  if (role === "viewer") return "viewer";
+  return "public";
+}
+
+const rank = (level) => {
+  const i = ACCESS_LEVELS.indexOf(level);
+  // An unknown level is the strictest, not the loosest: a typo in a record must
+  // lock a page, never open it.
+  return i < 0 ? ACCESS_LEVELS.length : i;
+};
+
+/** Does `level` admit someone who reads at `held`? */
+export const admits = (level, held) => rank(held) >= rank(level);
+
+/** A record's effective level: its own if set, else the site's default. */
+export const effectiveLevel = (recordAccess, siteDefault) =>
+  ACCESS_LEVELS.includes(recordAccess) ? recordAccess : (ACCESS_LEVELS.includes(siteDefault) ? siteDefault : "public");
+
+/**
+ * Should a record appear in the site's listings (index, feeds, search,
+ * articles.json, nav)? Only if it is no more restricted than the site itself.
+ *
+ * A listing is published at the site's default level, so it is readable by
+ * everyone who can read the site. Listing a more restricted page there would
+ * hand its title and summary to people who cannot open it.
+ */
+export const listedAt = (recordAccess, siteDefault) =>
+  rank(effectiveLevel(recordAccess, siteDefault)) <= rank(effectiveLevel("", siteDefault));
+
+/**
+ * The per-path overrides the edge needs for a site: every published record
+ * whose level differs from the site default, as `/slug.html` -> level.
+ */
+export function edgeOverrides(records, siteDefault) {
+  const out = {};
+  for (const r of records) {
+    if (r.status !== "published" || !ACCESS_LEVELS.includes(r.access)) continue;
+    const level = effectiveLevel(r.access, siteDefault);
+    if (level !== effectiveLevel("", siteDefault)) out[`/${r.slug}.html`] = level;
+  }
+  return out;
+}
 
 /** Membership changes that would strand a site. */
 export function validateMemberChange(nextMembers, actorEmail) {

@@ -35,6 +35,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { loadConfig, reportConfigError } from "../cli/lib/config.mjs";
+import { buildRouterSource, routerConfig, routerName } from "./lib/edge-function.mjs";
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -52,7 +53,7 @@ const FN_URL = config.deploy.functionUrl ?? "";
 
 const STAGING = hosted.tenantStagingBucket || `${DOMAIN.split(".")[0]}-sites-staging`;
 const LIVE = hosted.tenantLiveBucket || `${DOMAIN.split(".")[0]}-sites-live`;
-const CF_FUNCTION = `${DOMAIN.split(".")[0]}-tenant-router`;
+const CF_FUNCTION = routerName(DOMAIN);
 const OAC_NAME = `${DOMAIN.split(".")[0]}-sites-oac`;
 
 for (const [k, v] of Object.entries({ "hosted.domain": DOMAIN, "hosted.certificateArn": CERT, "hosted.hostedZoneId": ZONE_ID })) {
@@ -152,11 +153,16 @@ if (!STATUS_ONLY) {
 
 // ---------------------------------------------------------------- function
 step(2, "Edge function");
-const fnSource = (await readFile(path.join(ROOT, "infra", "edge", "tenant-router.js"), "utf8"))
-  .replace("__APEX__", DOMAIN);
-if (fnSource.includes("__APEX__") || !fnSource.includes(DOMAIN)) {
-  throw new Error("tenant-router.js did not get its apex substituted -- refusing to publish it");
+// The router reads the edge access store on every request, so it must never be
+// uploaded without one: a router with no store association throws, and every
+// site behind it 503s. infra/provision-access.mjs creates the store.
+const KVS_ARN = config.hosted?.accessKvsArn ?? "";
+if (!KVS_ARN && !STATUS_ONLY) {
+  console.error("FATAL: config.hosted.accessKvsArn is not set. Run infra/provision-access.mjs first:\n" +
+    "  the tenant router needs its edge access store before it can be deployed.");
+  process.exit(1);
 }
+const fnSource = await buildRouterSource(ROOT, DOMAIN);
 
 let fnEtag = null;
 const existingFn = await aws(["cloudfront", "describe-function", "--name", CF_FUNCTION], { region: "us-east-1", allowFail: true });
@@ -169,14 +175,14 @@ if (STATUS_ONLY) {
   try {
     if (!existingFn) {
       const res = await aws(["cloudfront", "create-function", "--name", CF_FUNCTION,
-        "--function-config", JSON.stringify({ Comment: `${DOMAIN} host -> tenant prefix`, Runtime: "cloudfront-js-2.0" }),
+        "--function-config", JSON.stringify(routerConfig(DOMAIN, KVS_ARN)),
         "--function-code", `fileb://${tmp}`], { region: "us-east-1" });
       fnEtag = res.ETag;
       log("created");
     } else {
       const res = await aws(["cloudfront", "update-function", "--name", CF_FUNCTION,
         "--if-match", existingFn.ETag,
-        "--function-config", JSON.stringify({ Comment: `${DOMAIN} host -> tenant prefix`, Runtime: "cloudfront-js-2.0" }),
+        "--function-config", JSON.stringify(routerConfig(DOMAIN, KVS_ARN)),
         "--function-code", `fileb://${tmp}`], { region: "us-east-1" });
       fnEtag = res.ETag;
       log("updated");

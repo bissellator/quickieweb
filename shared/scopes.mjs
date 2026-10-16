@@ -104,15 +104,17 @@ export function allows(scopes, { site, resource, action }) {
  * quietly missing.
  */
 export function grantableFor(role, siteId) {
-  if (!role) return [];
+  // A viewer has no console or API access to delegate: even a read scope would
+  // let a token see drafts the viewer themselves cannot.
+  if (!role || role === "viewer") return [];
   const out = [];
   for (const resource of RESOURCES) {
     out.push(scope(siteId, resource, "read"));
     if (READ_ONLY_RESOURCES.has(resource)) continue;
-    // Only an owner can hand out writes. An editor can edit through the console
-    // -- where a person is watching -- without being able to mint a credential
-    // that edits unattended.
-    if (role === "owner") out.push(scope(siteId, resource, "write"));
+    // Only an owner or admin can hand out writes. An editor can edit through the
+    // console -- where a person is watching -- without being able to mint a
+    // credential that edits unattended.
+    if (role === "owner" || role === "admin") out.push(scope(siteId, resource, "write"));
   }
   return out.sort();
 }

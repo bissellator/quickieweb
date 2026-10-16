@@ -3,6 +3,7 @@
 // a button is a courtesy, not a control.
 
 import * as auth from "./auth.js";
+import * as ms from "./ms-signin.js";
 
 const $ = (id) => document.getElementById(id);
 // Tolerant of a missing element on purpose. These are called in loops over
@@ -22,7 +23,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 const ALL_VIEWS = ["gate", "emptyView", "articlesView", "editorView", "designView",
-  "adminsView", "publishView", "statsView", "aiView"];
+  "adminsView", "securityView", "publishView", "statsView", "aiView"];
 
 /**
  * One place that hides everything, so a new view cannot be forgotten in one of
@@ -70,6 +71,10 @@ async function boot() {
   }
   await auth.init(cfg.googleClientId, onAuthChange);
   auth.renderButton($("gbtn"));
+  if (cfg.microsoftClientId) {
+    show($("msbtn"), true);
+    $("msbtn").addEventListener("click", () => ms.start(cfg.microsoftClientId));
+  }
   // Keep a local copy of whatever is in the editor, so an expired session or a
   // closed tab never costs an article. Cleared on a successful save.
   restoreLocalDraft();
@@ -221,6 +226,7 @@ const LOADERS = {
   articles: () => loadArticles(),
   design: () => loadDesign(),
   admins: () => loadAdmins(),
+  security: () => loadSecurity(),
   publish: () => loadChangeset(),
   stats: () => loadStats(),
   ai: () => loadContract(),
@@ -474,6 +480,7 @@ async function openEditor(a) {
   $("f-headline").value = a?.title ?? "";
   $("f-dek").value = a?.dek ?? "";
   $("f-status").value = a?.status ?? "draft";
+  $("f-access").value = a?.access ?? "";
   $("f-template").value = type;
   $("f-date").value = a?.date ?? new Date().toISOString().slice(0, 10);
   $("f-src-title").value = a?.source?.title ?? "";
@@ -526,7 +533,7 @@ function toggleType() {
   show($("pullField"), !isPage);
 }
 $("f-template").addEventListener("change", () => { toggleType(); markDirty(); });
-for (const id of ["f-headline", "f-dek", "f-status", "f-date", "f-category",
+for (const id of ["f-headline", "f-dek", "f-status", "f-access", "f-date", "f-category",
   "f-src-title", "f-src-url", "f-src-pub", "f-src-fig", "f-src-disc", "f-pull",
   "f-nav-label", "f-nav-order"]) {
   $(id).addEventListener("input", markDirty);
@@ -595,6 +602,8 @@ $("saveArticle").addEventListener("click", async () => {
     title: $("f-headline").value.trim(),
     dek: $("f-dek").value.trim(),
     status: $("f-status").value,
+    // "" means "follow the site's default", which is what most things want.
+    access: $("f-access").value,
     body: ed.getData(),
   };
 
@@ -1096,6 +1105,18 @@ $("refreshStats").addEventListener("click", async () => {
 
 // ------------------------------------------------------------------- admins
 let adminList = [];
+// The roles come from the server and are kept here, not re-defaulted on every
+// redraw. A default that lacked a member's role would leave their <select> with
+// no matching option, and a browser shows the FIRST option -- "owner" -- so the
+// next Save would have promoted a viewer to owner.
+let adminRoles = ["owner", "admin", "editor", "viewer"];
+
+const ROLE_HELP = {
+  owner: "everything, and a site always keeps one",
+  admin: "everything: settings, members, security, publishing",
+  editor: "writes and publishes content",
+  viewer: "reads the protected site; no console",
+};
 
 async function loadAdmins() {
   err($("adminErr"), null);
@@ -1103,13 +1124,15 @@ async function loadAdmins() {
   // on the caller's role in THAT site -- not on a platform-wide admin list.
   const data = await auth.api("/members");
   adminList = data.members;
-  renderAdmins(data.roles);
-  const mayEdit = data.role === "owner" || me.staff;
+  if (Array.isArray(data.roles) && data.roles.length) adminRoles = data.roles;
+  renderAdmins();
+  const mayEdit = data.role === "owner" || data.role === "admin" || me.staff;
   $("saveAdmins").disabled = !mayEdit;
   $("addAdmin").disabled = !mayEdit;
 }
 
-function renderAdmins(roles = ["owner", "editor"]) {
+function renderAdmins() {
+  const roles = adminRoles;
   const body = $("adminRows");
   body.innerHTML = "";
   adminList.forEach((a, i) => {
@@ -1117,7 +1140,7 @@ function renderAdmins(roles = ["owner", "editor"]) {
     tr.innerHTML = `
       <td><input value="${esc(a.email)}" data-i="${i}" data-k="email"></td>
       <td><select data-i="${i}" data-k="role">${roles.map((r) =>
-        `<option value="${r}"${r === a.role ? " selected" : ""}>${r}</option>`).join("")}</select></td>
+        `<option value="${r}"${r === a.role ? " selected" : ""} title="${esc(ROLE_HELP[r] ?? "")}">${r}</option>`).join("")}</select></td>
       <td><input value="${esc(a.name ?? "")}" data-i="${i}" data-k="name"></td>
       <td><button class="btn danger" data-rm="${i}"${a.email === me.email ? " disabled title='You cannot remove yourself'" : ""}>Remove</button></td>`;
     body.append(tr);
@@ -1136,7 +1159,8 @@ $("adminRows").addEventListener("click", (ev) => {
   renderAdmins();
 });
 $("addAdmin").addEventListener("click", () => {
-  adminList.push({ email: "", role: "editor", name: "" });
+  // New people start with the least access; promote them deliberately.
+  adminList.push({ email: "", role: "viewer", name: "" });
   renderAdmins();
 });
 $("saveAdmins").addEventListener("click", async () => {
@@ -1146,6 +1170,60 @@ $("saveAdmins").addEventListener("click", async () => {
     await loadAdmins();
   } catch (e) {
     err($("adminErr"), e.message);
+  }
+});
+
+// ----------------------------------------------------------------- security
+// Who may READ the published site. One choice, applied with one button, because
+// it republishes: the listings are rendered at this level and must be rebuilt
+// to match it. The server refuses anything but "public" where the edge cannot
+// enforce it, so the disabled radios here are a courtesy, not the control.
+let securityCurrent = "public";
+
+async function loadSecurity() {
+  err($("securityErr"), null);
+  show($("securityLog"), false);
+  const data = await auth.api("/access");
+  securityCurrent = data.default;
+  for (const r of document.querySelectorAll('input[name="siteAccess"]')) {
+    r.checked = r.value === data.default;
+    r.disabled = !data.enforced && r.value !== "public";
+  }
+  show($("securityUnavailable"), !data.enforced);
+  $("securityStatus").textContent = data.default === "public"
+    ? `This site is public${data.protectedPages ? `, with ${data.protectedPages} protected page(s)` : ""}.`
+    : `Only signed-in ${data.default}s and above can read this site${data.protectedPages ? `; ${data.protectedPages} page(s) set their own level` : ""}.`;
+  $("applySecurity").disabled = true;
+}
+
+$("securityLevels").addEventListener("change", () => {
+  const chosen = document.querySelector('input[name="siteAccess"]:checked')?.value;
+  $("applySecurity").disabled = !chosen || chosen === securityCurrent;
+});
+
+$("applySecurity").addEventListener("click", async () => {
+  const chosen = document.querySelector('input[name="siteAccess"]:checked')?.value;
+  if (!chosen) return;
+  const opening = ["public", "viewer", "editor", "admin"].indexOf(chosen) < ["public", "viewer", "editor", "admin"].indexOf(securityCurrent);
+  const sure = confirm(opening
+    ? `Open this site to ${chosen === "public" ? "EVERYONE" : `all ${chosen}s and above`}? This republishes the site now.`
+    : `Restrict this site to signed-in ${chosen}s and above? This republishes the site now.`);
+  if (!sure) return;
+  const btn = $("applySecurity");
+  btn.disabled = true;
+  btn.textContent = "Applying...";
+  err($("securityErr"), null);
+  try {
+    const res = await auth.api("/access", { method: "PUT", body: JSON.stringify({ default: chosen }) });
+    $("securityLog").textContent = (res.logs ?? []).join("\n");
+    show($("securityLog"), true);
+    await loadSecurity();
+    show($("securityLog"), true);
+  } catch (e) {
+    err($("securityErr"), e.message);
+    btn.disabled = false;
+  } finally {
+    btn.textContent = "Apply and republish";
   }
 });
 

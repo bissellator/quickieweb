@@ -217,10 +217,18 @@ No framework — `node --test`.
 
 ## Dependencies
 
-The repository has none. The Lambda bundle has three
-(`@aws-sdk/client-s3`, `@aws-sdk/client-cloudfront`, `sharp`), installed into a
-build directory and never here. CKEditor is fetched by `npm run fetch-editor` and
-gitignored.
+The repository has none. The Lambda bundle has five, installed into a build
+directory and never here:
+
+| Package | Why it earned its place |
+|---|---|
+| `@aws-sdk/client-s3` | Content, the registry and the template library all live in S3. |
+| `@aws-sdk/client-cloudfront` | CDN invalidation on publish. |
+| `@aws-sdk/client-cloudfront-keyvaluestore` | Writing who may read which page to the edge store, for protected sites. |
+| `@aws-sdk/signature-v4a` | That store's API is signed with SigV4A, which the other clients do not need; this is AWS's pure-JavaScript signer. |
+| `sharp` | Resizing uploaded images to web renditions. |
+
+CKEditor is fetched by `npm run fetch-editor` and gitignored.
 
 That is a deliberate constraint rather than an accident, and it is the same
 argument the platform makes about running code: every dependency is a decision,

@@ -87,6 +87,13 @@ async function exchange(idToken) {
   return session;
 }
 
+/**
+ * Trade an ID token from ANY provider for our session. The Lambda decides which
+ * provider it came from and verifies it; this side only carries it. Used by the
+ * Microsoft callback (ms-signin.js), which has no Google client to drive.
+ */
+export const exchangeIdToken = (idToken) => exchange(idToken);
+
 export async function init(cid, changeHandler) {
   clientId = cid;
   onChange = changeHandler ?? onChange;

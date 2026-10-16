@@ -140,6 +140,11 @@ export function normalizeContent(raw = {}, { now = new Date().toISOString() } = 
     body: str(raw.body),
     pullQuote: str(raw.pullQuote),
     tags: Array.isArray(raw.tags) ? raw.tags.filter((t) => typeof t === "string") : [],
+    // Who may read it once published: one of ACCESS_LEVELS in shared/site.mjs,
+    // or "" to follow the site's default. The list is repeated rather than
+    // imported so this module stays free of the platform model; site.mjs is
+    // what decides what a level means, and a test holds the two lists equal.
+    access: ["public", "viewer", "editor", "admin"].includes(raw.access) ? raw.access : "",
     seo: {
       description: str(raw.seo?.description),
       noindex: Boolean(raw.seo?.noindex),

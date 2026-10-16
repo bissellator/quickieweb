@@ -187,6 +187,11 @@ test("a scope is a ceiling: an editor cannot grant writes", () => {
   // And the refusal is enumerable, so a consent screen can say why.
   assert.ok(refusedBy(asked, "editor", "acme").includes("qw:acme:publish:write"));
   assert.deepEqual(clampToRole(asked, null, "acme"), [], "a non-member grants nothing");
+
+  assert.deepEqual(clampToRole(asked, "admin", "acme"), normalizeScopes(asked),
+    "an admin may grant what an owner may");
+  assert.deepEqual(clampToRole(asked, "viewer", "acme"), [],
+    "a viewer grants nothing, not even reads: a read token would see drafts the viewer cannot");
 });
 
 test("a scope for another site is dropped, whatever the role", () => {

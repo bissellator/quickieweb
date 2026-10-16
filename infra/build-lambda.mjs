@@ -42,15 +42,25 @@ const step = (n, s) => console.log(`\n[${n}] ${s}`);
 const log = (s) => console.log(`    ${s}`);
 const exists = async (p) => { try { await access(p); return true; } catch { return false; } };
 
-// npm install of sharp is slow and the result is platform-pinned, not
-// source-dependent, so it is reused unless --fresh. Everything else in the
-// build dir is replaced every time.
-const haveModules = !FRESH && await exists(path.join(BUILD, "node_modules", "@img", "sharp-linux-x64"));
+// npm install of sharp is slow and the result is platform-pinned, so the
+// installed node_modules is reused -- but only while admin/package.json says
+// what it said when they were installed. Reusing them across a dependency change
+// used to ship a bundle missing the new package, and the Lambda then failed on
+// its first import, after the deploy had already reported success.
+const DEPS_STAMP = path.join(BUILD, ".deps.json");
+const deps = JSON.stringify(JSON.parse(await readFile(path.join(ROOT, "admin", "package.json"), "utf8")).dependencies ?? {});
+const stamped = await readFile(DEPS_STAMP, "utf8").catch((err) => {
+  if (err.code === "ENOENT") return null;
+  throw err;
+});
+const haveModules = !FRESH && stamped === deps
+  && await exists(path.join(BUILD, "node_modules", "@img", "sharp-linux-x64"));
+if (!FRESH && stamped !== null && stamped !== deps) console.log("admin/package.json dependencies changed -- reinstalling");
 
 step(1, "Clean build dir");
 if (haveModules) {
   for (const entry of await readdir(BUILD)) {
-    if (entry !== "node_modules") await rm(path.join(BUILD, entry), { recursive: true, force: true });
+    if (entry !== "node_modules" && entry !== ".deps.json") await rm(path.join(BUILD, entry), { recursive: true, force: true });
   }
   log("kept node_modules (pass --fresh to reinstall)");
 } else {
@@ -109,7 +119,15 @@ if (haveModules) {
   await execFileAsync("npm", ["install", "--omit=dev", "--os=linux", "--cpu=x64",
     "--libc=glibc", "--no-audit", "--no-fund"],
     { cwd: BUILD, shell: process.platform === "win32", maxBuffer: 64 * 1024 * 1024 });
+  await writeFile(DEPS_STAMP, deps);
   log("installed");
+}
+
+// Every declared dependency must actually be there, whichever path got here.
+for (const name of Object.keys(JSON.parse(deps))) {
+  if (!await exists(path.join(BUILD, "node_modules", ...name.split("/"), "package.json"))) {
+    throw new Error(`${name} is declared in admin/package.json but missing from the bundle -- rerun with --fresh.`);
+  }
 }
 
 if (!await exists(path.join(BUILD, "node_modules", "@img", "sharp-linux-x64"))) {

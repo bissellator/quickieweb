@@ -20,14 +20,19 @@ import { timingSafeEqual } from "node:crypto";
 import sharp from "sharp";
 
 import {
-  verifyGoogleIdToken, AuthError, issueSession, verifySession, looksLikeSession,
+  verifyGoogleIdToken, verifyMicrosoftIdToken, idTokenProvider,
+  AuthError, issueSession, verifySession, looksLikeSession,
 } from "./lib/auth.mjs";
 import { storeFor, s3, PLATFORM_BUCKET } from "./lib/store.mjs";
 import * as registry from "./lib/registry.mjs";
 import {
   hostToSiteId, checkSiteId, newSiteRecord, normalizeMembers,
-  validateMemberChange, canAdminister, roleInSite, SITE_ROLES,
+  validateMemberChange, canAdminister, canEdit, roleInSite, SITE_ROLES,
+  ACCESS_LEVELS, levelForRole,
 } from "../shared/site.mjs";
+import { desiredEdgeState, planEdgeSync } from "../shared/access-plan.mjs";
+import { signGrant } from "../shared/access-token.mjs";
+import { edgeConfigured, requireEdge, accessSecret, applyEdgeOps } from "./lib/access-edge.mjs";
 import { processLogs, readReport, readDay, readDetailWindow } from "./lib/stats.mjs";
 import * as oauthStore from "./lib/oauth-store.mjs";
 import {
@@ -57,6 +62,9 @@ import {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID ?? "";
+// Empty means Microsoft sign-in is off; a Microsoft token is then refused with a
+// clear message rather than falling through to the Google verifier.
+const MICROSOFT_CLIENT_ID = process.env.MICROSOFT_CLIENT_ID ?? "";
 const SESSION_SECRET = process.env.SESSION_SECRET ?? "";
 
 // The hosted platform's apex. Used only to work out which site a request is for
@@ -196,9 +204,14 @@ async function requireActor(headers) {
     };
   }
 
+  // A session, or an ID token from either provider. Which verifier runs is read
+  // from the token's issuer, and each verifier re-checks that issuer against a
+  // signature it validates, so the choice cannot be steered into trusting it.
   const identity = looksLikeSession(token)
     ? verifySession(token, SESSION_SECRET)
-    : await verifyGoogleIdToken(token, GOOGLE_CLIENT_ID);
+    : idTokenProvider(token) === "microsoft"
+      ? await verifyMicrosoftIdToken(token, MICROSOFT_CLIENT_ID)
+      : await verifyGoogleIdToken(token, GOOGLE_CLIENT_ID);
 
   const email = String(identity.email ?? "").trim().toLowerCase();
   if (!email) throw new AuthError("Token carries no email address", 403);
@@ -268,7 +281,19 @@ async function siteContext(actor, query, headers) {
   const { site, role, viaStaff } = await registry.authorizeSite(s3, {
     email: actor.email, siteId, staff: actor.isStaff,
   });
+  requireConsoleRole(role, viaStaff || actor.isStaff, siteId);
   return { site, role, viaStaff, store: storeFor(site) };
+}
+
+/**
+ * The console is for people who edit. A viewer is a member -- authorizeSite
+ * finds them -- but may only READ the published site, which happens at the edge
+ * and never here. Every route below siteContext assumed "member means editor"
+ * before viewers existed, so this one check is what keeps that assumption true.
+ */
+function requireConsoleRole(role, staff, siteId) {
+  if (staff || canEdit(role)) return;
+  throw new AuthError(`You can read "${siteId}", but not edit it.`, 403);
 }
 
 // ------------------------------------------------------------------ content
@@ -314,7 +339,7 @@ async function rebuild(ctx) {
   const records = (await allArticles(store)).map((a) => normalizeContent(a));
 
   const { files, warnings } = renderSite({
-    template, site: site.site, theme: site.theme, records,
+    template, site: site.site, theme: site.theme, records, access: site.access.default,
   });
   for (const w of warnings) console.warn(`[${site.siteId}] theme: ${w}`);
 
@@ -351,6 +376,47 @@ async function rebuild(ctx) {
   return [...Object.keys(files), ...staticPaths];
 }
 
+/**
+ * Publish staging to live, keeping the edge store in step with it.
+ *
+ * The bytes and the access levels cannot change atomically together, so the
+ * store goes to the stricter of old and new BEFORE the copy and to exactly the
+ * new levels AFTER it (shared/access-plan.mjs explains why). The site record is
+ * written after each step so it never claims less than the store holds.
+ *
+ * A site that has never been protected plans no edge changes at all, and so
+ * publishes exactly as it always did -- with or without an edge store.
+ */
+async function publishWithAccess(ctx, onLog = () => {}) {
+  const { site, store } = ctx;
+  const records = (await allArticles(store)).map((a) => normalizeContent(a));
+  const next = desiredEdgeState(site.access.default, records);
+  const plan = planEdgeSync(site.siteId, site.access.edge, next);
+  const touchesEdge = [plan.before, plan.after].some((o) => o.puts.length || o.deletes.length);
+  if (touchesEdge) requireEdge();
+
+  await applyEdgeOps(plan.before, onLog);
+  if (touchesEdge) {
+    site.access.edge = plan.max;
+    await registry.putSite(s3, site);
+  }
+
+  const result = await store.publish(await store.computeChangeset(), onLog);
+
+  await applyEdgeOps(plan.after, onLog);
+  if (touchesEdge) {
+    site.access.edge = next;
+    await registry.putSite(s3, site);
+  }
+  return { ...result, access: { default: site.access.default, protectedPages: Object.keys(next.paths).length } };
+}
+
+/** Only a path on the same site, the same rule the edge applies after sign-in. */
+const safeNext = (n) => {
+  const s = String(n ?? "/");
+  return s.startsWith("/") && !s.startsWith("//") && !s.includes("\\") ? s : "/";
+};
+
 /** Persist a change to the site record, then re-render against it. */
 async function saveSite(ctx, mutate) {
   mutate(ctx.site);
@@ -377,7 +443,9 @@ async function servePreview(segments) {
   // Re-check membership on every preview fetch rather than trusting the token's
   // own claim. A token issued before somebody was removed from a site must stop
   // working the moment they are, not fifteen minutes later.
-  if (!roleInSite(claims.email, site)) {
+  // A viewer may not preview: a preview is unpublished work, and a viewer reads
+  // only what has been published.
+  if (!canEdit(roleInSite(claims.email, site))) {
     const user = await registry.getUser(s3, claims.email);
     if (!registry.isStaff(user)) throw new PreviewError("You no longer have access to that site", 403);
   }
@@ -394,7 +462,7 @@ async function servePreview(segments) {
     const records = (await allArticles(store)).map((a) => normalizeContent(a));
     // base = this preview's own prefix, which every relative link in the output
     // then resolves back through.
-    files = renderSite({ template, site: site.site, theme: site.theme, records, base }).files;
+    files = renderSite({ template, site: site.site, theme: site.theme, records, access: site.access.default, base }).files;
     cacheFiles(token, files);
   }
 
@@ -580,7 +648,8 @@ async function routeApi({ method, segments, query, headers, body }) {
     // so a site they are only an editor on shows what it can and cannot grant
     // rather than quietly disappearing.
     const mine = await registry.sitesFor(s3, actor.email, { staff: actor.isStaff });
-    const offers = mine.map((s) => ({
+    // A site you only view has nothing to grant, so it is not offered at all.
+    const offers = mine.filter((s) => s.role !== "viewer").map((s) => ({
       siteId: s.siteId,
       name: s.name || s.siteId,
       role: s.role,
@@ -799,8 +868,11 @@ async function routeApi({ method, segments, query, headers, body }) {
     // not appear here and cannot be addressed by guessing its id -- authorizeSite
     // answers "no such site" for both cases, so the API is not an oracle for
     // which tenant names exist.
+    // A site you only VIEW is not in the console's list: there is nothing in the
+    // console you could do with it, and opening it would only meet a 403.
     if (method === "GET" && !second) {
-      const sites = await registry.sitesFor(s3, actor.email, { staff: actor.isStaff });
+      const sites = (await registry.sitesFor(s3, actor.email, { staff: actor.isStaff }))
+        .filter((s) => actor.isStaff || canEdit(s.role));
       return json(200, { sites, staff: actor.isStaff, hostedDomain: HOSTED_DOMAIN || null });
     }
 
@@ -808,6 +880,8 @@ async function routeApi({ method, segments, query, headers, body }) {
       const { site, role, viaStaff } = await registry.authorizeSite(s3, {
         email: actor.email, siteId: second, staff: actor.isStaff,
       });
+      // The record carries the member list; a viewer does not get to read it.
+      requireConsoleRole(role, viaStaff || actor.isStaff, second);
       return json(200, { site, role, viaStaff });
     }
 
@@ -879,6 +953,40 @@ async function routeApi({ method, segments, query, headers, body }) {
     }
   }
 
+  // ---- reader sign-in: POST /api/access/grant  { site, next }
+  //
+  // The sign-in page (admin/ui/access.html) calls this once the person is
+  // signed in. It answers with a redirect to the SITE's /__qw/session carrying
+  // a 60-second grant, which the edge turns into a host-only cookie. Above
+  // siteContext on purpose: a viewer may read a site but not use the console,
+  // and this is the one door they need.
+  //
+  // "No such site" and "not a member" get the same answer, so this is not an
+  // oracle for which private sites exist or who is on them.
+  if (head === "access" && second === "grant") {
+    if (method !== "POST") return json(405, { error: "POST only" });
+    if (actor.scopes !== null) {
+      return json(403, { error: "An access token cannot sign in to read a site. Sign in as a person." });
+    }
+    const b = asJson();
+    const siteId = String(b.site ?? "").trim().toLowerCase();
+    const site = siteId ? await registry.getSite(s3, siteId) : null;
+    const role = site ? (roleInSite(actor.email, site) ?? (actor.isStaff ? "staff" : null)) : null;
+    const level = levelForRole(role);
+    if (level === "public") {
+      return json(403, {
+        error: `${actor.email} does not have access to this site. Ask whoever runs it to add you, or sign in with a different account.`,
+        email: actor.email,
+      });
+    }
+    const grant = signGrant({ siteId, level, secret: await accessSecret() });
+    return json(200, {
+      redirect: `${site.site.baseUrl}/__qw/session?g=${encodeURIComponent(grant)}&next=${encodeURIComponent(safeNext(b.next))}`,
+      level,
+      email: actor.email,
+    });
+  }
+
   // ---- preview links. Issuing one is a normal authenticated, site-scoped act;
   // only the fetching of preview bytes uses the token instead.
   if (head === "preview" && method === "POST") {
@@ -888,7 +996,8 @@ async function routeApi({ method, segments, query, headers, body }) {
 
     // Authorize the SITE here, once, so the token can be trusted later without
     // re-reading membership on every stylesheet fetch.
-    await registry.authorizeSite(s3, { email: actor.email, siteId, staff: actor.isStaff });
+    const { site, role, viaStaff } = await registry.authorizeSite(s3, { email: actor.email, siteId, staff: actor.isStaff });
+    requireConsoleRole(role, viaStaff || actor.isStaff, siteId);
 
     // Fail now if the template does not exist, rather than handing back a link
     // that 500s when it is opened.
@@ -1265,6 +1374,41 @@ async function routeApi({ method, segments, query, headers, body }) {
     }
   }
 
+  // ---- access: who may READ the published site (the big switch)
+  //
+  // GET  -> the site's default level, the levels, and whether the edge can
+  //         enforce anything at all on this installation
+  // PUT  { default } -> change it, then rebuild and publish
+  //
+  // Changing it publishes, deliberately. The listings (index, feeds, search) are
+  // rendered at the default level, so a change is not complete until they are
+  // re-rendered and live -- and the edge sync around that publish is what makes
+  // the switch safe in both directions.
+  if (head === "access") {
+    if (method === "GET") {
+      return json(200, {
+        default: site.access.default,
+        levels: ACCESS_LEVELS,
+        enforced: edgeConfigured(),
+        protectedPages: Object.keys(site.access.edge.paths).length,
+      });
+    }
+    if (method === "PUT") {
+      if (!mayAdminister) return json(403, { error: "Only an owner or admin can change who may read the site" });
+      const level = asJson().default;
+      if (!ACCESS_LEVELS.includes(level)) {
+        return json(400, { error: `default must be one of: ${ACCESS_LEVELS.join(", ")}` });
+      }
+      if (level !== "public") requireEdge();
+      site.access.default = level;
+      await registry.putSite(s3, site);
+      await rebuild(ctx);
+      const logs = [];
+      const result = await publishWithAccess(ctx, (m) => logs.push(m));
+      return json(200, { ...result, default: level, logs, by: actor.email });
+    }
+  }
+
   // ---- stats: CloudFront access logs, processed on demand
   if (head === "stats") {
     if (!store.LOG_BUCKET) {
@@ -1305,9 +1449,8 @@ async function routeApi({ method, segments, query, headers, body }) {
     if (method === "GET") return json(200, await store.computeChangeset());
     if (method === "POST") {
       await rebuild(ctx);
-      const changeset = await store.computeChangeset();
       const logs = [];
-      const result = await store.publish(changeset, (m) => logs.push(m));
+      const result = await publishWithAccess(ctx, (m) => logs.push(m));
       return json(200, { ...result, logs, by: actor.email, siteId: site.siteId });
     }
   }

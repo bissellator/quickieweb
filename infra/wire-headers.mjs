@@ -72,13 +72,16 @@ const step = (n, s) => console.log(`\n[${n}] ${s}`);
 //   'unsafe-inline' style  CKEditor sets element styles at runtime
 //   googleusercontent.com  the signed-in user's avatar
 //   data: fonts/images     the generated favicon, and CKEditor's inline icons
+//   login.microsoftonline.com   Microsoft sign-in redeems its code here
+//                          (admin/ui/ms-signin.js); the authorize step is a
+//                          top-level navigation, which CSP does not govern
 const CSP = [
   "default-src 'self'",
   "script-src 'self' https://accounts.google.com",
   "style-src 'self' 'unsafe-inline' https://accounts.google.com",
   "img-src 'self' data: https://*.googleusercontent.com https://accounts.google.com",
   "font-src 'self' data:",
-  "connect-src 'self' https://accounts.google.com",
+  "connect-src 'self' https://accounts.google.com https://login.microsoftonline.com",
   // Kept for browsers that have not moved One Tap to FedCM. With
   // use_fedcm_for_prompt the browser renders the chooser itself and no iframe
   // is embedded, but the fallback still needs to be allowed.

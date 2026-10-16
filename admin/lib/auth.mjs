@@ -36,25 +36,33 @@ export class AuthError extends Error {
   }
 }
 
-// Google rotates signing keys; cache them but honour the cache header so a
+// Microsoft: one key set for every tenant, personal accounts included.
+const MS_JWKS_URI = "https://login.microsoftonline.com/common/discovery/v2.0/keys";
+// The tenant every personal Microsoft account (outlook.com, hotmail.com, ...)
+// signs in through. Fixed by Microsoft.
+const MS_CONSUMER_TENANT = "9188040d-6c67-4c5b-b112-36a304b66dad";
+const MS_ISSUER_RE = /^https:\/\/login\.microsoftonline\.com\/([0-9a-f-]{36})\/v2\.0$/;
+
+// Providers rotate signing keys; cache them but honour the cache header so a
 // rotation does not lock every admin out until the next cold start.
-let jwksCache = { keys: null, expiresAt: 0 };
+const jwksCache = new Map();   // uri -> { keys, expiresAt }
 
-async function fetchJwks() {
-  if (jwksCache.keys && Date.now() < jwksCache.expiresAt) return jwksCache.keys;
+async function fetchJwks(uri = JWKS_URI, label = "Google") {
+  const hit = jwksCache.get(uri);
+  if (hit?.keys && Date.now() < hit.expiresAt) return hit.keys;
 
-  const res = await fetch(JWKS_URI);
-  if (!res.ok) throw new AuthError(`Could not fetch Google JWKS (HTTP ${res.status})`, 503);
+  const res = await fetch(uri);
+  if (!res.ok) throw new AuthError(`Could not fetch ${label} JWKS (HTTP ${res.status})`, 503);
 
   const body = await res.json();
   if (!Array.isArray(body.keys) || !body.keys.length) {
-    throw new AuthError("Google JWKS response contained no keys", 503);
+    throw new AuthError(`${label} JWKS response contained no keys`, 503);
   }
 
-  // Respect max-age, floor of 5 minutes so a bad header cannot hammer Google.
+  // Respect max-age, floor of 5 minutes so a bad header cannot hammer anyone.
   const cc = res.headers.get("cache-control") ?? "";
   const maxAge = Number(cc.match(/max-age=(\d+)/)?.[1] ?? 3600);
-  jwksCache = { keys: body.keys, expiresAt: Date.now() + Math.max(maxAge, 300) * 1000 };
+  jwksCache.set(uri, { keys: body.keys, expiresAt: Date.now() + Math.max(maxAge, 300) * 1000 });
   return body.keys;
 }
 
@@ -122,6 +130,102 @@ export async function verifyGoogleIdToken(idToken, clientId) {
     name: payload.name ?? null,
     picture: payload.picture ?? null,
     sub: payload.sub,
+    expiresAt: payload.exp,
+  };
+}
+
+/**
+ * Which provider minted this ID token, read from its UNVERIFIED issuer.
+ *
+ * Only ever used to pick which verifier runs, and each verifier then checks the
+ * issuer itself against the signature it validates -- so lying about the issuer
+ * just sends a token to a verifier that rejects it.
+ */
+export function idTokenProvider(idToken) {
+  try {
+    const payload = JSON.parse(b64uToBuf(String(idToken).split(".")[1] ?? "").toString("utf8"));
+    return MS_ISSUER_RE.test(payload?.iss ?? "") ? "microsoft" : "google";
+  } catch {
+    // Unparseable: let the Google verifier produce its precise error.
+    return "google";
+  }
+}
+
+/**
+ * Verify a Microsoft (Entra ID or personal account) ID token.
+ *
+ * Same discipline as Google's -- RS256 only, the key from Microsoft's JWKS, the
+ * audience pinned, the clock checked -- plus one rule Google does not need.
+ *
+ * THE EMAIL MUST BE ONE MICROSOFT VOUCHES FOR
+ *
+ * In a work or school tenant the `email` claim is an attribute an administrator
+ * can set to anything, verified or not. Trusting it is the "nOAuth" class of
+ * account takeover: make a tenant, set your user's email to the victim's, sign
+ * in to any app that keys accounts on email. Since access here IS keyed on
+ * email, an address is accepted only when:
+ *   - it is a personal Microsoft account (the consumer tenant), whose address is
+ *     the account's own verified sign-in name; or
+ *   - the token carries xms_edov=true: Microsoft asserting that the email's
+ *     domain is verified as owned by that tenant. It is an optional claim the
+ *     app registration has to ask for (see the Microsoft section of docs/ADMIN.md).
+ */
+export async function verifyMicrosoftIdToken(idToken, clientId) {
+  if (!idToken || typeof idToken !== "string") throw new AuthError("Missing ID token");
+  if (!clientId) throw new AuthError("Microsoft sign-in is not configured on this installation", 400);
+
+  const parts = idToken.split(".");
+  if (parts.length !== 3) throw new AuthError("Malformed ID token");
+  const [headerB64, payloadB64, sigB64] = parts;
+
+  let header, payload;
+  try {
+    header = JSON.parse(b64uToBuf(headerB64).toString("utf8"));
+    payload = JSON.parse(b64uToBuf(payloadB64).toString("utf8"));
+  } catch {
+    throw new AuthError("Unparseable ID token");
+  }
+  if (header.alg !== "RS256") throw new AuthError(`Unexpected token algorithm: ${header.alg}`);
+
+  const keys = await fetchJwks(MS_JWKS_URI, "Microsoft");
+  const jwk = keys.find((k) => k.kid === header.kid);
+  if (!jwk) throw new AuthError("Token signed with an unknown key");
+
+  const verifier = createVerify("RSA-SHA256");
+  verifier.update(`${headerB64}.${payloadB64}`);
+  verifier.end();
+  if (!verifier.verify(jwkToPem(jwk), b64uToBuf(sigB64))) {
+    throw new AuthError("ID token signature is not valid");
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  // The issuer names the tenant, and must name the SAME tenant as `tid`: the
+  // common key set signs for every tenant, so the issuer is what binds a token
+  // to one of them.
+  const tenant = MS_ISSUER_RE.exec(payload.iss ?? "")?.[1];
+  if (!tenant || tenant !== payload.tid) throw new AuthError(`Unexpected issuer: ${payload.iss}`);
+  if (payload.aud !== clientId) throw new AuthError("Token was issued for a different application");
+  if (typeof payload.exp !== "number" || payload.exp + CLOCK_SKEW_SEC < now) {
+    throw new AuthError("ID token has expired");
+  }
+  if (typeof payload.nbf === "number" && payload.nbf - CLOCK_SKEW_SEC > now) {
+    throw new AuthError("ID token is not valid yet");
+  }
+
+  const personal = tenant === MS_CONSUMER_TENANT;
+  const email = String(payload.email ?? (personal ? payload.preferred_username : "") ?? "").trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new AuthError("Token carries no email address");
+  const domainVerified = payload.xms_edov === true || payload.xms_edov === "true" || payload.xms_edov === 1 || payload.xms_edov === "1";
+  if (!personal && !domainVerified) {
+    throw new AuthError("Microsoft has not verified that this organisation owns the email address on this account, " +
+      "so it cannot be used to sign in here.", 403);
+  }
+
+  return {
+    email,
+    name: payload.name ?? null,
+    picture: null,
+    sub: `ms:${tenant}:${payload.oid ?? payload.sub}`,
     expiresAt: payload.exp,
   };
 }

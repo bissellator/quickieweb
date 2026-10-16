@@ -17,6 +17,7 @@ import {
   buildViewModel, buildNav, projectPost, projectPage, urlFor, siteSeo, websiteJsonLd,
 } from "./template/viewmodel.mjs";
 import { isDated, publishedOnly, sortContent } from "./content.mjs";
+import { listedAt } from "./site.mjs";
 import { buildSearchIndex, CLIENT_SOURCE } from "./search.mjs";
 import { CLIENT_SOURCE as GALLERY_CLIENT } from "./gallery.mjs";
 
@@ -37,9 +38,10 @@ const contentType = (name) =>
  * @param site      the `site` block of a site record
  * @param theme     the site's token overrides
  * @param records   content records (normalized). Drafts are dropped here.
+ * @param access    the site's default reading level (ACCESS_LEVELS in site.mjs)
  * @returns { files, posts, pages, warnings }
  */
-export function renderSite({ template, site, theme = {}, records = [], base = "", now = new Date() }) {
+export function renderSite({ template, site, theme = {}, records = [], access = "public", base = "", now = new Date() }) {
   const missing = ["index", "article", "page", "404"].filter((l) => !template.layouts[l]);
   if (missing.length) {
     throw new RenderError(
@@ -47,8 +49,16 @@ export function renderSite({ template, site, theme = {}, records = [], base = ""
   }
 
   const live = sortContent(publishedOnly(records));
-  const postRecords = live.filter((r) => isDated(r.type));
-  const pageRecords = live.filter((r) => r.type === "page");
+  // Every published record gets its own page; the edge decides who may open it.
+  // But the LISTINGS -- index, nav, feeds, search, articles.json -- are read at
+  // the site's default level, so a more restricted record stays out of them.
+  // Otherwise its title and summary would be published to people who cannot
+  // read it, on the very page that is meant to hide it.
+  const listed = (r) => listedAt(r.access, access);
+  const allPostRecords = live.filter((r) => isDated(r.type));
+  const allPageRecords = live.filter((r) => r.type === "page");
+  const postRecords = allPostRecords.filter(listed);
+  const pageRecords = allPageRecords.filter(listed);
 
   // `base` is where this rendering will be SERVED from. Empty means relative,
   // which works at a site's own domain and equally under a preview prefix. Only
@@ -81,8 +91,12 @@ export function renderSite({ template, site, theme = {}, records = [], base = ""
   // Requiring a `gallery` layout instead would invalidate every template ever
   // written against this engine, to no reader's benefit.
   const layoutFor = (post) => (post.isGallery && template.layouts.gallery ? "gallery" : "article");
-  for (const post of posts) draw(layoutFor(post), `${post.slug}.html`, { post, seo: post.seo }, post.url);
-  for (const page of pages) draw("page", `${page.slug}.html`, { page, seo: page.seo }, page.url);
+  for (const post of allPostRecords.map((r) => projectPost(r, site, base))) {
+    draw(layoutFor(post), `${post.slug}.html`, { post, seo: post.seo }, post.url);
+  }
+  for (const page of allPageRecords.map((r) => projectPage(r, site, base))) {
+    draw("page", `${page.slug}.html`, { page, seo: page.seo }, page.url);
+  }
 
   draw("index", "index.html", {
     seo: siteSeo(site, {

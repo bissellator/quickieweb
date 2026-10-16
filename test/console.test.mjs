@@ -68,7 +68,7 @@ test("every tab that needs a site is marked, and the ones that do not are not", 
   // calls an API that answers 400 "No site selected".
   const needsSite = [...html.matchAll(/<button[^>]*data-needs-site[^>]*data-view="([a-z]+)"/g)]
     .map((m) => m[1]);
-  assert.deepEqual(needsSite.sort(), ["admins", "articles", "design", "publish", "stats"]);
+  assert.deepEqual(needsSite.sort(), ["admins", "articles", "design", "publish", "security", "stats"]);
 
   const aiTab = html.match(/<button[^>]*data-view="ai"[^>]*>/)?.[0] ?? "";
   assert.ok(aiTab, "expected a Build with AI tab");
@@ -77,7 +77,7 @@ test("every tab that needs a site is marked, and the ones that do not are not", 
 });
 
 test("the error surface the handlers write into exists", () => {
-  for (const id of ["globalErr", "gateErr", "designErr", "editErr"]) {
+  for (const id of ["globalErr", "gateErr", "designErr", "editErr", "adminErr", "securityErr"]) {
     assert.ok(declaredIds.has(id), `#${id} is missing`);
   }
 });

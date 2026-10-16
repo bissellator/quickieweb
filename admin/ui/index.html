@@ -26,6 +26,7 @@
     <button data-needs-site class="tab" data-view="design">Design</button>
     <button data-needs-site class="tab" data-view="stats">Stats</button>
     <button data-needs-site class="tab" data-view="admins">People</button>
+    <button data-needs-site class="tab" data-view="security">Security</button>
     <button data-needs-site class="tab" data-view="publish">Publish</button>
     <button class="tab" data-view="ai">Build with AI</button>
   </nav>
@@ -47,9 +48,10 @@
        somebody who had just signed in. -->
   <section class="view gate" id="gate">
     <h1>Sign in</h1>
-    <p class="muted">Signing in with Google proves who you are. What you may edit is
-      decided per site, by that site's people list.</p>
+    <p class="muted">Signing in proves who you are. What you may edit is decided per
+      site, by that site's people list.</p>
     <div id="gbtn"></div>
+    <button class="btn msbtn" id="msbtn" type="button" hidden>Sign in with Microsoft</button>
     <p class="err" id="gateErr" hidden></p>
   </section>
 
@@ -95,6 +97,15 @@
             <option value="podcast">audio / podcast</option>
             <option value="gallery">photo gallery</option>
             <option value="page">static page</option>
+          </select>
+        </label>
+        <label title="Who can open this once it is published. 'Site default' follows the Security tab.">Who can read
+          <select id="f-access">
+            <option value="">site default</option>
+            <option value="public">everyone (public)</option>
+            <option value="viewer">viewers and up</option>
+            <option value="editor">editors and admins</option>
+            <option value="admin">admins only</option>
           </select>
         </label>
         <label id="dateField">Date<input id="f-date" type="date"></label>
@@ -191,16 +202,53 @@
       <h1>People</h1>
       <button class="btn primary" id="saveAdmins">Save list</button>
     </div>
-    <p class="muted">Who may edit <strong>this site</strong>. Authorization only: everyone here
-      still proves who they are through Google, and this list decides what they may touch
+    <p class="muted">Who may edit or read <strong>this site</strong>. Authorization only: everyone
+      here still proves who they are by signing in, and this list decides what they may touch
       once they have. Membership is per site, so adding somebody here gives them nothing
       anywhere else.</p>
+    <dl class="roles small">
+      <div><dt>owner</dt><dd>everything; a site always keeps at least one</dd></div>
+      <div><dt>admin</dt><dd>everything: settings, people, security, publishing</dd></div>
+      <div><dt>editor</dt><dd>writes and publishes content; reads editor-level pages</dd></div>
+      <div><dt>viewer</dt><dd>reads the site when it is protected; no console</dd></div>
+    </dl>
     <table class="tbl"><thead><tr><th>Email</th><th>Role</th><th>Name</th><th></th></tr></thead>
       <tbody id="adminRows"></tbody></table>
     <button class="btn" id="addAdmin">Add</button>
     <p class="err" id="adminErr" hidden></p>
-    <p class="muted small">An owner can edit this list. The last owner cannot be removed,
-      and you cannot remove yourself.</p>
+    <p class="muted small">An owner or admin can edit this list. The last owner cannot be
+      removed, and you cannot remove yourself.</p>
+  </section>
+
+  <!-- security: who may READ the published site. The default applies to every
+       page and post; any one of them can set its own level in the editor. -->
+  <section class="view" id="securityView" hidden>
+    <div class="viewhead">
+      <h1>Security</h1>
+    </div>
+    <p class="muted">Who can read the published site. Each level lets in everyone at or above
+      it: <strong>viewers</strong> admits viewers, editors and admins, but not the public.
+      A page or post can override this with <em>Who can read</em> in the editor.</p>
+    <p class="err" id="securityUnavailable" hidden>Site security is not set up on this
+      installation yet, so sites can only be public. (An operator runs
+      <code>infra/provision-access.mjs</code>.)</p>
+    <fieldset class="levels" id="securityLevels">
+      <label class="level"><input type="radio" name="siteAccess" value="public">
+        <span><strong>Public</strong> Anyone with the link.</span></label>
+      <label class="level"><input type="radio" name="siteAccess" value="viewer">
+        <span><strong>Viewers</strong> Signed-in viewers, editors and admins of this site.</span></label>
+      <label class="level"><input type="radio" name="siteAccess" value="editor">
+        <span><strong>Editors</strong> Signed-in editors and admins only.</span></label>
+      <label class="level"><input type="radio" name="siteAccess" value="admin">
+        <span><strong>Admins</strong> Signed-in owners and admins only.</span></label>
+    </fieldset>
+    <button class="btn primary big" id="applySecurity" disabled>Apply and republish</button>
+    <p class="muted small">Applying republishes the site: the home page, feeds and search are
+      rebuilt so they only list what this level may read. Readers sign in with the account on
+      the People list.</p>
+    <p class="muted small" id="securityStatus"></p>
+    <p class="err" id="securityErr" hidden></p>
+    <pre class="log" id="securityLog" hidden></pre>
   </section>
 
   <!-- design: template choice + the customization form, both generated from

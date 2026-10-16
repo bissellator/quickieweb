@@ -42,6 +42,91 @@ token and the Lambda verifies its signature.
 Until the client ID is set, `/api/health` reports `clientId: null` and the sign-in
 page says so rather than failing silently.
 
+## Optional: Microsoft sign-in
+
+Lets people sign in with a personal Microsoft account (Outlook.com, Hotmail) or a
+work or school account. It's off until a client ID is configured: with none, the
+button doesn't appear and the Lambda refuses Microsoft tokens.
+
+In the Azure portal (<https://portal.azure.com>) → **Microsoft Entra ID** →
+**App registrations** → **New registration**:
+
+1. **Supported account types:** *Accounts in any organizational directory and
+   personal Microsoft accounts*.
+2. **Redirect URI:** platform **Single-page application**, URI
+   `https://app.<your apex>/signin-microsoft.html` (on the hosted platform,
+   `https://app.quickieweb.com/signin-microsoft.html`). It must be the SPA
+   platform: that is what lets the browser redeem the code with PKCE and no
+   client secret.
+3. **Token configuration** → **Add optional claim** → **ID** → tick `email` and
+   `xms_edov`. Accept the prompt to add the Microsoft Graph `email` permission.
+4. Copy the **Application (client) ID** into `config.json` as
+   `deploy.microsoftClientId`, then redeploy the Lambda and the console:
+
+```bash
+node infra/deploy-lambda.mjs
+node infra/deploy-admin-ui.mjs
+```
+
+**Why `xms_edov` matters.** In a work or school tenant, a user's `email` is an
+attribute that tenant's administrator can set to any address, verified or not.
+Access here is keyed on email, so trusting it would let someone create a tenant,
+give a user your address, and sign in as you (the "nOAuth" class of attack). The
+Lambda therefore accepts a work-account email only when the token carries
+`xms_edov=true`: Microsoft asserting that the tenant owns the email's domain.
+Personal accounts need no such claim, because their address is the account's own
+verified sign-in name.
+
+## Reader access: protecting a published site
+
+A site, or any page or post on it, can be restricted to signed-in readers.
+
+**Levels:** `public < viewer < editor < admin`. Each admits everyone at or above
+it. A site has a default level (the console's **Security** tab), and each page or
+post can set its own (**Who can read** in the editor), stricter or looser.
+
+**Roles:** `owner` and `admin` read everything and manage the site. `editor`
+reads editor-level pages and edits content. `viewer` reads the protected site and
+nothing else: no console, no API, no drafts, no agent tokens.
+
+**How it is enforced.** At the edge, before the cache, by the tenant router
+(`infra/edge/tenant-router.js`), which reads a CloudFront KeyValueStore:
+
+- A site with no entry is public: one existence check per request, nothing more.
+- A protected page without a valid `qw_access` cookie for that site sends the
+  reader to `https://app.<apex>/access.html`. They sign in there (Google or
+  Microsoft), the Lambda checks their role on that site, and they are sent back
+  with a 60-second grant, which the edge exchanges for a 12-hour, host-only,
+  HttpOnly cookie.
+- A reader whose level is too low gets a "not available" page offering a
+  different account.
+- If the store can't be read, the request fails (503) rather than serving.
+
+**Listings never leak.** The index, nav, feeds, search index and `articles.json`
+are rendered at the site's default level, so a page more restricted than its site
+is left out of them rather than listing its title for people who can't open it.
+
+**Publishing keeps the edge in step.** Bytes and levels can't change atomically
+together, so every publish first sets the store to the stricter of the old and
+new levels, then copies the files, and only then sets the exact new levels
+(`shared/access-plan.mjs`). Nothing is ever briefly more open than before or after.
+
+**Known limits:** media files follow the site default, not a page's own level.
+Removing someone from a site takes effect at their next sign-in (up to 12 hours).
+Signing out is per site, at `/__qw/signout`.
+
+### Setting it up (operators, once per installation)
+
+```bash
+node infra/provision-access.mjs            # store + signing secret; router to DEVELOPMENT only
+node infra/provision-access.mjs --test     # run the DEVELOPMENT router against real requests
+node infra/provision-access.mjs --publish  # promote it to LIVE (every site uses it)
+node infra/build-lambda.mjs && node infra/deploy-lambda.mjs   # the Lambda can now write the store
+node infra/deploy-admin-ui.mjs             # the Security tab and the reader sign-in page
+```
+
+Until that is done, every site stays public and the console refuses to protect one.
+
 ## How authorization actually works
 
 Two separate things, and conflating them is how admin panels get walked into:

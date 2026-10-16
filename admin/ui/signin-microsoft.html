@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signing in - Quickieweb</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="admin.css">
+<style>
+  .gate-card { max-width: 28rem; margin: 4rem auto; padding: 0 1rem; }
+  .card { background: var(--card); border: 1px solid var(--rule); border-radius: 8px; padding: 1.6rem; }
+</style>
+</head>
+<body>
+<main class="gate-card">
+  <div class="card">
+    <p id="msg">Finishing Microsoft sign-in...</p>
+    <p class="err" id="msErr" hidden></p>
+    <p id="again" hidden><a href="/">Back to sign-in</a></p>
+  </div>
+</main>
+<script type="module" src="signin-microsoft.js"></script>
+</body>
+</html>

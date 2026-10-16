@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in to read - Quickieweb</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="admin.css">
+<style>
+  /* One decision on one card, like the consent screen. */
+  .gate-card { max-width: 28rem; margin: 4rem auto; padding: 0 1rem 4rem; }
+  .card { background: var(--card); border: 1px solid var(--rule); border-radius: 8px; padding: 1.6rem; }
+  .brand { font-weight: 600; font-size: 1.05rem; padding-bottom: .8rem;
+    border-bottom: 1px solid var(--rule); margin-bottom: 1.1rem; }
+  .title { font-size: 1.2rem; font-weight: 600; margin: 0 0 .3rem; }
+  .who { color: var(--soft); font-size: .9rem; margin: 0 0 1.2rem; }
+  #gbtn { display: flex; justify-content: center; margin: 1.2rem 0; }
+  .foot { color: var(--faint); font-size: .78rem; margin-top: 1.2rem; line-height: 1.5; }
+  .actions { display: flex; gap: .6rem; margin-top: 1rem; }
+  .actions .btn { flex: 1; justify-content: center; }
+</style>
+</head>
+<body>
+<main class="gate-card">
+  <div class="card">
+    <div class="brand">Quickieweb</div>
+
+    <section id="signinStep" hidden>
+      <p class="title" id="signinTitle">Sign in to read this site</p>
+      <p class="who" id="signinWho">This site is only open to the people its owners have added.</p>
+      <div id="gbtn"></div>
+      <button class="btn msbtn" id="msbtn" type="button" hidden>Sign in with Microsoft</button>
+      <p class="err" id="signinErr" hidden></p>
+    </section>
+
+    <section id="workingStep" hidden>
+      <p class="title">Opening the site...</p>
+      <p class="who" id="workingWho"></p>
+    </section>
+
+    <section id="deniedStep" hidden>
+      <p class="title">No access</p>
+      <p class="who" id="deniedBody"></p>
+      <div class="actions">
+        <button class="btn primary" id="switchAccount">Use a different account</button>
+      </div>
+    </section>
+
+    <section id="failStep" hidden>
+      <p class="title">Something went wrong</p>
+      <p class="who" id="failBody"></p>
+    </section>
+
+    <p class="foot">Signing in proves who you are; the site's own people list decides whether
+      you may read it. Nothing is shared with the site but your reading level.</p>
+  </div>
+</main>
+<script type="module" src="access.js"></script>
+</body>
+</html>
