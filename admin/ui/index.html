@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Admin</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
+<!-- Before any stylesheet: sets light or dark on <html> before first paint. -->
+<script src="theme.js"></script>
 <link rel="stylesheet" href="ckeditor.css">
 <link rel="stylesheet" href="admin.css">
 <!-- Vendored, not CDN-loaded. cdn.ckeditor.com had script-execution rights
@@ -38,6 +40,7 @@
     <span id="whoEmail"></span>
     <button class="link" id="signOut">sign out</button>
   </span>
+  <button class="themetoggle" type="button" data-action="theme-toggle" aria-label="Toggle light / dark mode" title="Toggle light / dark mode"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.5a6.5 6.5 0 0 1 0 13z" fill="currentColor"/></svg></button>
 </header>
 
 <main id="main">

@@ -2,9 +2,16 @@
 :root{--ink:#16181d;--soft:#5a616b;--faint:#8b929c;--bg:#f6f5f2;--card:#fff;
   --rule:#dcd8d0;--accent:#b3341f;--ok:#1b6b57;--mono:ui-monospace,Consolas,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
-@media(prefers-color-scheme:dark){:root{--ink:#e8e5df;--soft:#a5a19a;--faint:#7b776f;
-  --bg:#15161a;--card:#1d1f25;--rule:#31343c;--accent:#ef6a4f;--ok:#4fbf9c}}
+/* Dark follows the toggle (theme.js puts dark-mode or light-mode on <html>
+   before first paint) and, when that script has not run, the system setting. */
+@media(prefers-color-scheme:dark){:root:not(.light-mode){--ink:#e8e5df;--soft:#a5a19a;--faint:#7b776f;
+  --bg:#15161a;--card:#1d1f25;--rule:#31343c;--accent:#ef6a4f;--ok:#4fbf9c;color-scheme:dark}}
+:root.dark-mode{--ink:#e8e5df;--soft:#a5a19a;--faint:#7b776f;
+  --bg:#15161a;--card:#1d1f25;--rule:#31343c;--accent:#ef6a4f;--ok:#4fbf9c;color-scheme:dark}
 *{box-sizing:border-box}
+/* hidden means hidden, even on an element whose class sets display (.msbtn did,
+   so "Sign in with Microsoft" showed on installations without Microsoft). */
+[hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans)}
 .bar{display:flex;align-items:center;gap:1.2rem;padding:.7rem 1.2rem;
   border-bottom:1px solid var(--rule);background:var(--card);flex-wrap:wrap}
@@ -13,7 +20,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans)}
 .tab{border:0;background:transparent;color:var(--soft);font:inherit;cursor:pointer;
   padding:.35rem .7rem;border-radius:4px}
 .tab.is-on{background:var(--bg);color:var(--ink);font-weight:600}
-.who{margin-left:auto;font-family:var(--mono);font-size:.78rem;color:var(--faint)}
+.bar .who{margin-left:auto;font-family:var(--mono);font-size:.78rem;color:var(--faint)}
 .link{border:0;background:none;color:var(--accent);cursor:pointer;font:inherit;text-decoration:underline}
 main{max-width:56rem;margin:0 auto;padding:1.6rem 1.2rem 4rem}
 .viewhead{display:flex;align-items:center;justify-content:space-between;gap:1rem;
@@ -28,7 +35,9 @@ h1{font-size:1.45rem;margin:0}
 .btn:hover{border-color:var(--soft)}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .btn.danger{color:var(--accent)}
-.btn:disabled{opacity:.45;cursor:not-allowed}
+/* Flat and quiet in both themes; faded accent read as a muddy brick in dark. */
+.btn:disabled,.btn.primary:disabled{background:var(--bg);border-color:var(--rule);
+  color:var(--faint);cursor:not-allowed}
 .list{list-style:none;margin:0;padding:0;display:grid;gap:.55rem}
 .item{display:flex;justify-content:space-between;align-items:center;gap:1rem;
   background:var(--card);border:1px solid var(--rule);border-radius:5px;padding:.8rem 1rem}
@@ -39,6 +48,9 @@ h1{font-size:1.45rem;margin:0}
 .grid{display:grid;gap:.9rem}
 .row{display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:.9rem}
 label{display:grid;gap:.28rem;font-size:.82rem;color:var(--soft)}
+/* The text-field width below would stretch radios and checkboxes across the
+   row and push their label to the far edge. */
+input[type=radio],input[type=checkbox]{width:auto;flex:none;accent-color:var(--accent)}
 input,textarea,select{font:inherit;padding:.45rem .6rem;border:1px solid var(--rule);
   border-radius:4px;background:var(--card);color:var(--ink);width:100%}
 textarea{resize:vertical;font-size:.92rem;line-height:1.5}
@@ -266,7 +278,7 @@ code{font-family:var(--mono);font-size:.88em}
   border-radius:6px;background:var(--card);cursor:pointer}
 .level:has(input:checked){border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
 .level:has(input:disabled){opacity:.5;cursor:not-allowed}
-.level input{margin-top:.3rem}
+.level input{margin:.3rem 0 0}
 .level strong{display:block}
 .btn.big{padding:.75rem 1.4rem;font-size:1rem}
 dl.roles{display:grid;gap:.25rem;margin:.5rem 0 1rem}
@@ -274,3 +286,13 @@ dl.roles div{display:flex;gap:.6rem}
 dl.roles dt{font-weight:600;min-width:4.5rem}
 dl.roles dd{margin:0}
 .msbtn{display:flex;margin:.6rem auto 0;width:280px;justify-content:center;gap:.5rem}
+
+/* light / dark toggle (theme.js), as on airbrx.ai */
+.themetoggle{display:inline-flex;align-items:center;justify-content:center;flex:none;
+  width:2rem;height:2rem;padding:0;background:none;border:1px solid var(--rule);
+  border-radius:4px;color:var(--soft);cursor:pointer}
+.themetoggle:hover{color:var(--ink);border-color:var(--soft)}
+.themetoggle svg{width:1rem;height:1rem}
+/* .who carries margin-left:auto when signed in; signed out, the toggle does. */
+.bar .who[hidden] + .themetoggle{margin-left:auto}
+.card .themetoggle{float:right;margin:-.3rem -.3rem 0 0}
