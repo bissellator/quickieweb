@@ -24,6 +24,7 @@ import {
 import { CloudFrontClient, CreateInvalidationCommand } from "@aws-sdk/client-cloudfront";
 
 import { keyFor, unkeyFor } from "../../shared/site.mjs";
+import { cacheControlFor, contentTypeFor } from "../../shared/object-policy.mjs";
 
 // The buckets are not necessarily in the function's region: the function lives
 // in us-east-1 with the rest of the account's Lambdas, the buckets in us-west-2.
@@ -43,42 +44,9 @@ async function streamToBuffer(stream) {
   return Buffer.concat(chunks);
 }
 
-// -------------------------------------------------------------- cache policy
-//
-// CloudFront invalidation clears the edge. It cannot clear a browser. So the two
-// caches get different instructions: a long `s-maxage` for the CDN, which
-// publish() invalidates on every change, and a short `max-age` for browsers,
-// which we have no lever over at all. A one-year max-age on an article is
-// unrecallable -- a returning reader keeps the stale copy and nothing we do from
-// this side reaches them.
-//
-// media/ is the one honest exception: those keys carry an upload timestamp, so
-// the bytes at a given URL really never change and `immutable` is true rather
-// than aspirational.
-const YEAR = 31536000;
-
-export function cacheControlFor(key) {
-  const k = clean(key);
-  // Staging-only state. Never published, never public, read back by the admin on
-  // the next request -- caching it would only serve us a stale admin list.
-  if (k.startsWith("_internal/") || k === "admins.json" || k === "sitedata.json") return "no-store";
-  if (k.startsWith("media/")) return `public, max-age=${YEAR}, immutable`;
-  return `public, max-age=300, s-maxage=${YEAR}`;
-}
-
-/** Extension -> MIME. Only the types a site or a template package contains. */
-export function contentTypeFor(key) {
-  const ext = String(key).toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
-  return {
-    css: "text/css; charset=utf-8", js: "text/javascript; charset=utf-8",
-    html: "text/html; charset=utf-8", json: "application/json; charset=utf-8",
-    xml: "application/xml; charset=utf-8", txt: "text/plain; charset=utf-8",
-    svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
-    webp: "image/webp", gif: "image/gif", ico: "image/svg+xml",
-    woff2: "font/woff2", woff: "font/woff", ttf: "font/ttf",
-    mp3: "audio/mpeg", m4a: "audio/mp4", wav: "audio/wav", ogg: "audio/ogg",
-  }[ext] ?? "application/octet-stream";
-}
+// Cache-Control and Content-Type for every object, in shared/ so the CLI that
+// pushes static files writes objects exactly as this store does.
+export { cacheControlFor, contentTypeFor };
 
 // Prefixes a publish must never move. `admin/` is the tool that fixes a bad
 // publish, so it must be unreachable by one; `_internal/` is the article store

@@ -1640,19 +1640,41 @@ $("siteTemplateList").addEventListener("click", async (ev) => {
   }
 });
 
-// ---- static pages: complete documents, uploaded and published verbatim
+// ---- static files: pages and what they load, uploaded and published verbatim
 //
 // The path is asked for rather than taken from the filename: where a page lands
 // is a decision about the site's URLs, and a file called `Untitled (3).html`
 // should not get to make it.
+//
+// Text goes up as text so it stays readable through the API; anything else as
+// base64, because the request is JSON. The cap keeps the base64 body inside the
+// Lambda's 6 MB request limit; a whole site, or bigger files, go up with
+// `node cli/push-static.mjs` instead.
+const STATIC_TEXT = /\.(html?|css|m?js|json|map|webmanifest|txt|xml|svg|ico)$/i;
+const STATIC_MAX = 4 * 1024 * 1024;
 let pendingStatic = null;
+
+function toBase64(buf) {
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
 
 $("f-staticfile").addEventListener("change", async (ev) => {
   err($("designErr"), null);
   const file = ev.target.files?.[0];
-  pendingStatic = file ? await file.text() : null;
-  if (file && !$("f-staticpath").value.trim()) $("f-staticpath").value = file.name;
-  $("staticMeta").textContent = file ? `${file.name}, ${Math.round(file.size / 1024)}KB` : "";
+  pendingStatic = null;
+  $("staticMeta").textContent = "";
+  if (file && file.size > STATIC_MAX) {
+    err($("designErr"), `${file.name} is ${Math.round(file.size / 1048576)} MB; the console takes up to 4 MB. Use cli/push-static.mjs for bigger files.`);
+  } else if (file) {
+    pendingStatic = STATIC_TEXT.test(file.name)
+      ? { body: await file.text() }
+      : { bodyBase64: toBase64(await file.arrayBuffer()) };
+    if (!$("f-staticpath").value.trim()) $("f-staticpath").value = file.name;
+    $("staticMeta").textContent = `${file.name}, ${Math.round(file.size / 1024)}KB`;
+  }
   $("uploadStatic").disabled = !pendingStatic;
 });
 
@@ -1666,9 +1688,11 @@ $("uploadStatic").addEventListener("click", async () => {
   try {
     const res = await auth.api(`/static/${path.split("/").map(encodeURIComponent).join("/")}`, {
       method: "PUT",
-      body: JSON.stringify({ body: pendingStatic }),
+      body: JSON.stringify(pendingStatic),
     });
-    $("staticMeta").textContent = `Uploaded ${res.path}. Publish to put it live.`;
+    $("staticMeta").textContent = res.replaces
+      ? `Uploaded ${res.path}. It replaces the template's own ${res.path}; publish to put it live.`
+      : `Uploaded ${res.path}. Publish to put it live.`;
     $("f-staticfile").value = "";
     $("f-staticpath").value = "";
     pendingStatic = null;
@@ -1687,13 +1711,14 @@ async function loadStaticPages() {
     ? pages.map((p) => `<li class="tpl">
         <div>
           <p class="tpl-name">${esc(p.path)}</p>
-          <p class="muted small">${Math.round((p.size ?? 0) / 1024) || 1}KB</p>
+          <p class="muted small">${Math.round((p.size ?? 0) / 1024) || 1}KB${p.replaces
+            ? " &middot; <strong>replaces the template's file</strong>" : ""}</p>
         </div>
         <span class="tpl-actions">
           <button class="btn small danger" data-delete-static="${esc(p.path)}">Delete</button>
         </span>
       </li>`).join("")
-    : '<li class="muted">No static pages.</li>';
+    : '<li class="muted">No static files.</li>';
 }
 
 $("staticList").addEventListener("click", async (ev) => {

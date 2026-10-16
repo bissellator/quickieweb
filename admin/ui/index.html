@@ -283,14 +283,17 @@
     <p class="muted small" id="uploadMeta"></p>
     <ul class="templates" id="siteTemplateList"></ul>
 
-    <h2 class="sub">Static pages</h2>
-    <p class="muted">Complete HTML files, published exactly as given, for pages the
-      editor cannot express. They carry none of the site's chrome and are not
+    <h2 class="sub">Static files</h2>
+    <p class="muted">Pages, and the stylesheets, scripts, images and fonts they load,
+      published exactly as given. They carry none of the site's chrome and are not
       searchable &mdash; use a static page when you want to own all the markup, and a
-      normal page when you want the template around it.</p>
+      normal page when you want the template around it. A static file at a path the
+      template also writes, such as <code>index.html</code> or
+      <code>assets/style.css</code>, replaces the template's. Up to 4 MB each here;
+      a whole folder goes up with <code>node cli/push-static.mjs</code>.</p>
     <div class="row">
       <label class="grow">Path<input id="f-staticpath" placeholder="shop/tees.html"></label>
-      <label class="grow">File<input type="file" id="f-staticfile" accept=".html,.htm,.css,.js,.json,.txt,.xml,.svg"></label>
+      <label class="grow">File<input type="file" id="f-staticfile"></label>
       <button class="btn" id="uploadStatic" disabled>Upload</button>
     </div>
     <p class="muted small" id="staticMeta"></p>

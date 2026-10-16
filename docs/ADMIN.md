@@ -457,22 +457,52 @@ place to go back to.
 Lambda container is reused across invocations, so a key of just `id@version`
 would serve one tenant's template to another. That single line is the isolation.
 
-### Static pages
+### Static files
 
-Complete documents, published verbatim, for markup the editor cannot express — a
-product page, a calculator, a landing page built elsewhere.
+Files published verbatim, for markup the editor cannot express: a product page,
+a calculator, a landing page, or a whole site built elsewhere, together with the
+stylesheets, scripts, images and fonts it loads. A site can mix them freely with
+posts and pages written in the console.
 
     <staging>/_internal/static/<path>   the source, never published
     <staging>/<path>                    the copy a publish promotes
 
-Both are written on upload, so the page appears in the next changeset rather
+Both are written on upload, so the file appears in the next changeset rather
 than after the next save. Nothing is templated in and nothing is extracted out:
 no masthead, no theme, no search index entry, no nav slot. A page that owns its
-markup owns all of it — use a `page` record when you want the site's chrome.
+markup owns all of it; use a `page` record when you want the site's chrome.
 
-Refused at upload: traversal or absolute paths, anything the renderer writes
-itself (`index.html`, `feed.xml`, `assets/`, …), and any path that would shadow
-a post or page rendering to the same filename.
+**Static files win.** A static file may sit at a path the site also writes for
+itself (`index.html`, `feed.xml`, `assets/style.css`), and then the static file
+is what publishes. That is an order, not a race: every rebuild renders, copies
+the template's assets, records what it wrote in `_internal/generated.json`, and
+re-stages the static files last, copying inside S3 so binary files arrive byte
+for byte. The console marks each file that replaces one the template wrote.
+Delete it and the next publish, which always rebuilds first, brings the
+template's version back.
+
+**Refused at upload:** traversal or absolute paths; types a web page does not
+load (the allowed list is `STATIC_EXTENSIONS` in `shared/static-pages.mjs`);
+the platform's paths (`admin/`, `_internal/`, `media/`, `__qw/`); the files the
+console reads back (`taxonomy.json`); a binary `favicon.ico` (the platform serves
+`.ico` as SVG, so upload `favicon.svg` or an SVG named `.ico`); and any path that
+would shadow a post or page rendering to the same filename.
+
+**Static files follow the site's reading level.** They have no per-file level of
+their own.
+
+**Uploading.** In the console (Design → Static files), one file at a time, up to
+4 MB each. A folder, or bigger files, go up from a checkout:
+
+```bash
+AWS_PROFILE=quickieweb node cli/push-static.mjs --site <id> --dir <folder> --dry-run
+AWS_PROFILE=quickieweb node cli/push-static.mjs --site <id> --dir <folder>
+```
+
+That stages only what changed (local MD5 against the stored ETag), with the same
+path rules, types and cache headers as the console. It never deletes unless
+given `--prune`. It does not publish: press Publish afterwards, so the edge's
+reading levels move in step with the bytes.
 
 ### The API
 

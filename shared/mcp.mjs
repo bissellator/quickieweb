@@ -204,7 +204,9 @@ export const TOOLS = [
     description:
       "A complete HTML document, published exactly as written -- your own markup, styles "
       + "and scripts, with none of the site's furniture around it. For a page the editor "
-      + "cannot express. It is not searchable and gets no nav slot.",
+      + "cannot express. It is not searchable and gets no nav slot. Also takes the "
+      + "stylesheets and scripts such a page loads. At a path the template also writes "
+      + "(index.html, assets/style.css) it replaces the template's file.",
     inputSchema: withSite({
       path: str("Where it lands, e.g. shop/tees.html"),
       body: str("The whole document."),

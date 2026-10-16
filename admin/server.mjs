@@ -50,7 +50,7 @@ import {
 } from "./lib/templates.mjs";
 import {
   putStaticPage, listStaticPages, readStaticPage, removeStaticPage,
-  stageStaticPages, StaticPageRejected,
+  stageStaticPages, StaticPageRejected, GENERATED_LIST_KEY,
 } from "../shared/static-pages.mjs";
 import { renderSite, contentType } from "../shared/render.mjs";
 import { normalizeContent, validateContent } from "../shared/content.mjs";
@@ -364,16 +364,23 @@ async function rebuild(ctx) {
   // The template's own assets are copied server-side from the platform bucket
   // into this site's staging bucket, so the bytes never pass through here and a
   // site keeps working if the library later drops that version.
-  // Hand-authored pages are not in renderSite's file set -- nothing templates
-  // them -- so they are put back after it, from their source under _internal/.
-  const staticPaths = await stageStaticPages(store);
-
-  for (const { source, target, scope } of assetKeysFor(template)) {
+  const assets = assetKeysFor(template);
+  for (const { source, target, scope } of assets) {
     if (scope === "site") await store.copyWithinStaging(source, target);
     else await store.copyFromPlatform(source, target);
   }
 
-  return [...Object.keys(files), ...staticPaths];
+  // What this rebuild wrote for itself, so the static-file listing can say
+  // exactly which uploads replace the template's own files.
+  const generated = [...new Set([...Object.keys(files), ...assets.map((a) => a.target)])].sort();
+  await store.putJson(GENERATED_LIST_KEY, generated);
+
+  // Hand-authored files go back LAST, from their source under _internal/. Last
+  // is the rule: a static index.html or assets/style.css replaces the one just
+  // rendered or copied (shared/static-pages.mjs, "STATIC FILES WIN").
+  const staticPaths = await stageStaticPages(store);
+
+  return [...new Set([...generated, ...staticPaths])];
 }
 
 /**
@@ -1230,9 +1237,14 @@ async function routeApi({ method, segments, query, headers, body }) {
     if (method === "GET" && !rest) return json(200, { pages: await listStaticPages(store) });
 
     if (method === "GET" && rest) {
-      const body = await readStaticPage(store, rest);
-      if (body === null) return json(404, { error: `No static page at "${rest}"` });
-      return json(200, { path: rest, body });
+      try {
+        const body = await readStaticPage(store, rest);
+        if (body === null) return json(404, { error: `No static file at "${rest}"` });
+        return json(200, { path: rest, body });
+      } catch (err) {
+        if (err instanceof StaticPageRejected) return json(400, { error: err.message });
+        throw err;
+      }
     }
 
     if (method === "PUT" || method === "POST") {
@@ -1243,7 +1255,16 @@ async function routeApi({ method, segments, query, headers, body }) {
         // Slugs are passed in so a static page cannot quietly shadow a post or
         // page that renders to the same filename.
         const records = await allArticles(store);
-        const result = await putStaticPage(store, target, b.body, {
+        // Text arrives as `body`; anything else (images, fonts) as `bodyBase64`,
+        // because a JSON request cannot carry raw bytes.
+        let body = b.body;
+        if (typeof b.bodyBase64 === "string") {
+          if (!/^[A-Za-z0-9+/]*={0,2}$/.test(b.bodyBase64)) {
+            return json(400, { error: "bodyBase64 is not valid base64" });
+          }
+          body = Buffer.from(b.bodyBase64, "base64");
+        }
+        const result = await putStaticPage(store, target, body, {
           slugs: records.map((r) => r.slug).filter(Boolean),
         });
         return json(201, result);
