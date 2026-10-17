@@ -1244,6 +1244,16 @@ async function loadChangeset() {
   }
 }
 
+/** Poll the changeset until it is empty (true) or about a minute passes (false). */
+async function waitForLive() {
+  for (let i = 0; i < 12; i++) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const cs = await auth.api("/publish");
+    if (cs.upload.length + cs.delete.length === 0) return true;
+  }
+  return false;
+}
+
 $("doPublish").addEventListener("click", async () => {
   const btn = $("doPublish");
   btn.disabled = true;
@@ -1258,7 +1268,21 @@ $("doPublish").addEventListener("click", async () => {
     ].join("\n");
     await loadChangeset();
   } catch (e) {
-    err($("changeset"), e.message);
+    // A gateway timeout means the reply was lost, not necessarily the publish: the
+    // Lambda can run past CloudFront's wait. Publishing is a diff of staging against
+    // live, so asking for the changeset tells us whether it landed.
+    if (![502, 503, 504].includes(e.status)) { err($("changeset"), e.message); return; }
+    btn.textContent = "Checking live...";
+    const landed = await waitForLive();
+    if (landed) {
+      const log = $("publishLog");
+      show(log, true);
+      log.textContent = `The reply timed out (HTTP ${e.status}), but live now matches staging: published.`;
+      await loadChangeset();
+    } else {
+      err($("changeset"), `The reply timed out (HTTP ${e.status}) and live still differs from staging. ` +
+        "Press Publish again: it only copies what is still different.");
+    }
   } finally {
     btn.disabled = false;
     btn.textContent = "Publish to live";
