@@ -24,7 +24,7 @@ import path from "node:path";
 import os from "node:os";
 
 import { newSiteRecord, validateSite, keyFor, siteKeyFor, userKeyFor } from "../../shared/site.mjs";
-import { normalizeContent, validateContent } from "../../shared/content.mjs";
+import { normalizeContent, validateContent, summarizeContent } from "../../shared/content.mjs";
 import { renderSite, contentType } from "../../shared/render.mjs";
 import { tokenForm } from "../../shared/template/tokens.mjs";
 import { loadTemplateFromDir } from "../../cli/lib/template-fs.mjs";
@@ -74,6 +74,22 @@ export async function readJsonOrNull(aws, uri) {
 
 export const isEmail = (s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s);
 
+// One AWS CLI process per object is the slow part of a seed -- a site of a few
+// hundred posts was ~25 minutes sequentially. A small pool keeps it well under
+// S3's request rates while cutting that by the pool size. The first failure
+// rejects, and the caller's step stops there.
+const POOL = 8;
+async function inPool(items, fn) {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(POOL, items.length) }, worker));
+}
+
 /**
  * @param root       the repository root (templates/ and assets/ are read from it)
  * @param settings   from hostedSettings(config)
@@ -81,11 +97,20 @@ export const isEmail = (s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s);
  * @param owner      the Google account that will edit the site
  * @param name       display name for a NEW record; an existing record keeps its own
  * @param templateId template to render with
+ * @param templateDir render from this folder instead of templates/<templateId>
+ * @param templateScope "library" (default) or "site": what the record points at.
+ *                   A site template must already be pushed (cli/push-template.mjs)
+ *                   so the console's rebuilds find the same package.
  * @param contentDir folder of content JSON; missing means a blank site
  * @param shapeNew   (record) => void, for a caller's defaults on a NEW record only
+ * @param reshape    (record) => void, applied to the record whether new or not --
+ *                   for a migration that owns the site's settings
  * @param dry        report what would be written, write nothing
  */
-export async function seedSite({ root, settings, siteId, owner, name, templateId, contentDir, shapeNew = () => {}, dry = false }) {
+export async function seedSite({
+  root, settings, siteId, owner, name, templateId, templateDir = null, templateScope = "library",
+  contentDir, shapeNew = () => {}, reshape = () => {}, dry = false,
+}) {
   const log = (s) => console.log(`    ${s}`);
   const step = (n, s) => console.log(`\n[${n}] ${s}`);
   const aws = async (args) => (await execFileAsync("aws", [...args, "--region", settings.region], { maxBuffer: 32e6 })).stdout;
@@ -112,7 +137,10 @@ export async function seedSite({ root, settings, siteId, owner, name, templateId
       template: templateId,
     });
     if (!existing) shapeNew(record);
-    record.template = { id: templateId, version: record.template?.version ?? "" };
+    reshape(record);
+    record.template = templateScope === "site"
+      ? { id: templateId, version: "", scope: "site" }
+      : { id: templateId, version: record.template?.version ?? "" };
 
     const problems = validateSite(record);
     if (problems.length) {
@@ -148,7 +176,11 @@ export async function seedSite({ root, settings, siteId, owner, name, templateId
 
     // ------------------------------------------------------------------- render
     step(3, "Render");
-    const template = await loadTemplateFromDir(path.join(root, "templates", templateId));
+    const template = await loadTemplateFromDir(templateDir ?? path.join(root, "templates", templateId));
+    if (template.manifest.id !== templateId) {
+      console.error(`FATAL: ${templateDir} is template "${template.manifest.id}", not "${templateId}".`);
+      process.exit(1);
+    }
     const { files, warnings } = renderSite({ template, site: record.site, theme: record.theme, records });
     for (const w of warnings) console.warn(`    theme: ${w}`);
 
@@ -177,17 +209,24 @@ export async function seedSite({ root, settings, siteId, owner, name, templateId
       for (const s of slugs) log(`would write _internal/articles/${s}.json`);
       log(`would write _internal/articles/index.json (${slugs.length} slug(s))`);
     } else {
-      for (const rec of records) {
+      await inPool(records, async (rec) => {
         const local = path.join(tmpDir, `rec-${rec.slug}.json`);
         await writeFile(local, JSON.stringify(rec, null, 2));
         await aws(["s3", "cp", local, stagingKey(`_internal/articles/${rec.slug}.json`),
           "--content-type", "application/json", "--cache-control", "no-store"]);
-      }
+      });
+      // The index only once every record it names is in place.
       const idxFile = path.join(tmpDir, "index.json");
       await writeFile(idxFile, JSON.stringify(slugs, null, 2));
       await aws(["s3", "cp", idxFile, stagingKey("_internal/articles/index.json"),
         "--content-type", "application/json", "--cache-control", "no-store"]);
-      log(`${slugs.length} record(s) + index, staging only`);
+      // The console's list reads this instead of every record (admin/server.mjs
+      // listSummaries); without it the first list recomputes it, slowly.
+      const sumFile = path.join(tmpDir, "summary.json");
+      await writeFile(sumFile, JSON.stringify(Object.fromEntries(records.map((r) => [r.slug, summarizeContent(r)])), null, 2));
+      await aws(["s3", "cp", sumFile, stagingKey("_internal/articles/summary.json"),
+        "--content-type", "application/json", "--cache-control", "no-store"]);
+      log(`${slugs.length} record(s) + index + summary, staging only`);
       // Staging only, deliberately: SKIP_PREFIXES in admin/lib/store.mjs excludes
       // _internal/ from both sides of a changeset, so a copy in live would be an
       // orphan nothing reads and nothing ever cleans up.
@@ -203,7 +242,7 @@ export async function seedSite({ root, settings, siteId, owner, name, templateId
     if (dry) {
       for (const n of Object.keys(files)) log(`would write ${keyFor(record.storage, n)}`);
     } else {
-      for (const [n, body] of Object.entries(files)) {
+      await inPool(Object.entries(files), async ([n, body]) => {
         const local = path.join(tmpDir, n.replace(/[/\\]/g, "_"));
         await writeFile(local, body);
         const key = keyFor(record.storage, n);
@@ -213,7 +252,7 @@ export async function seedSite({ root, settings, siteId, owner, name, templateId
         for (const bucket of both) {
           await aws(["s3", "cp", local, `s3://${bucket}/${key}`, "--content-type", contentType(n), "--cache-control", cache]);
         }
-      }
+      });
       log(`wrote ${Object.keys(files).length} file(s) to staging and live`);
 
       // Template assets (the stylesheet, any fonts) live alongside the rendered

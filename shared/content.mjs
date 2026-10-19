@@ -70,9 +70,18 @@ function normalizeImages(raw) {
       // template reserve the box and stops the grid reflowing as images arrive.
       width: Number(i.width) || 0,
       height: Number(i.height) || 0,
+      // A smaller rendition for grids and cards. Empty means none; the view
+      // model falls back to `url`, so a template can always write thumbUrl.
+      thumb: str(i.thumb),
     }))
     .filter((i) => i.url);
 }
+
+// The console's upload writes `<base>.webp` and `<base>-thumb.webp` side by side
+// (admin/server.mjs, media POST). Recognising that pair here means a gallery
+// built from pasted uploads gets its thumbnails without the editor recording them.
+const MEDIA_FULL_RE = /^\/?media\/(?!.*-thumb\.webp$).+\.webp$/;
+const thumbFor = (url) => (MEDIA_FULL_RE.test(url) ? url.replace(/\.webp$/, "-thumb.webp") : "");
 
 const IMG_RE = /<img\b[^>]*>/gi;
 const attr = (tag, name) =>
@@ -99,6 +108,7 @@ export function extractImages(html = "") {
       caption: attr(tag, "title"),
       width: Number(attr(tag, "width")) || 0,
       height: Number(attr(tag, "height")) || 0,
+      thumb: attr(tag, "data-thumb") || thumbFor(url),
     });
     return "";
   });
@@ -208,7 +218,7 @@ export function validateContent(record) {
   }
   // Reserved because the renderer writes these itself; a page claiming one would
   // be silently overwritten at build time.
-  if (["index", "404", "feed", "podcast", "articles", "taxonomy", "theme"].includes(record.slug)) {
+  if (["index", "404", "feed", "podcast", "articles", "taxonomy", "theme", "archive", "tags"].includes(record.slug)) {
     problems.push(`slug "${record.slug}" is reserved by the renderer`);
   }
 
@@ -235,3 +245,20 @@ export function sortContent(records) {
 }
 
 export const publishedOnly = (records) => records.filter((r) => r.status === "published");
+
+/**
+ * What the console's content list shows for one record -- drafts included,
+ * bodies not. Kept as one manifest beside the records (summary.json) so the
+ * list is a single read instead of one per record. Written by whatever already
+ * holds every record: a rebuild, a seed.
+ */
+export const summarizeContent = (a) => ({
+  slug: a.slug, type: a.type, status: a.status,
+  title: a.title, dek: a.dek, date: a.date ?? "",
+  category: a.category, categoryLabel: a.categoryLabel,
+  nav: a.nav ?? null, updatedAt: a.updatedAt,
+});
+
+/** The list order: dated content newest first, then undated pages by title. */
+export const compareSummaries = (x, y) =>
+  (y.date || "0").localeCompare(x.date || "0") || x.title.localeCompare(y.title);

@@ -53,7 +53,7 @@ import {
   stageStaticPages, StaticPageRejected, GENERATED_LIST_KEY,
 } from "../shared/static-pages.mjs";
 import { renderSite, contentType } from "../shared/render.mjs";
-import { normalizeContent, validateContent } from "../shared/content.mjs";
+import { normalizeContent, validateContent, summarizeContent, compareSummaries } from "../shared/content.mjs";
 import { tokenForm } from "../shared/template/tokens.mjs";
 import {
   issuePreviewToken, verifyPreviewToken, previewFile, cachedFiles, cacheFiles,
@@ -304,16 +304,54 @@ function requireConsoleRole(role, staff, siteId) {
 // record that says who may read it.
 const articleKey = (slug) => `_internal/articles/${slug}.json`;
 const INDEX_KEY = "_internal/articles/index.json";
+// Every record's list fields in one object (shared/content.mjs summarizeContent).
+const SUMMARY_KEY = "_internal/articles/summary.json";
+
+// S3 calls run this many at a time. One at a time was ~85ms per object -- 40s
+// to read a 469-post site, past CloudFront's 30s origin timeout, so the
+// console's list and every save on a site that size never came back.
+const S3_POOL = 32;
+
+/** fn over every item, S3_POOL at a time; results in item order. First failure rejects. */
+async function inPool(items, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(S3_POOL, items.length) }, worker));
+  return out;
+}
 
 async function allArticles(store) {
   const index = await store.getJson(INDEX_KEY, []);
-  const out = [];
-  for (const slug of index) {
-    const a = await store.getJson(articleKey(slug), null);
-    if (a) out.push(a);
-  }
-  return out;
+  const found = await inPool(index, (slug) => store.getJson(articleKey(slug), null));
+  // Index order, and an index entry whose record is gone is skipped -- as before.
+  return found.filter(Boolean);
 }
+
+/**
+ * The content list from summary.json. Every save rebuilds, and the rebuild
+ * rewrites it from the records it already read, so it is current after any
+ * console write. It can still be missing (a site from before it existed) or out
+ * of step with the index (a writer that did not rebuild); either way it is
+ * recomputed from the records and written back, so the slow path runs once.
+ */
+async function listSummaries(store) {
+  const [index, summary] = await Promise.all([store.getJson(INDEX_KEY, []), store.getJson(SUMMARY_KEY, null)]);
+  const inStep = summary && typeof summary === "object" && !Array.isArray(summary) &&
+    index.length === Object.keys(summary).length && index.every((s) => Object.hasOwn(summary, s));
+  if (inStep) return index.map((s) => summary[s]);
+  const records = (await allArticles(store)).map((a) => normalizeContent(a));
+  await writeSummaries(store, records);
+  return records.map(summarizeContent);
+}
+
+const writeSummaries = (store, records) =>
+  store.putJson(SUMMARY_KEY, Object.fromEntries(records.map((r) => [r.slug, summarizeContent(r)])));
 
 /**
  * Re-render one site into its staging bucket. Cheap enough to do on every save:
@@ -342,6 +380,7 @@ async function rebuild(ctx) {
     template, site: site.site, theme: site.theme, records, access: site.access.default,
   });
   for (const w of warnings) console.warn(`[${site.siteId}] theme: ${w}`);
+  await writeSummaries(store, records);
 
   // The admin's category picker and its customization form both read this, so
   // the editor can only offer what the site and the active template declare.
@@ -353,13 +392,10 @@ async function rebuild(ctx) {
     theme: tokenForm(template.manifest, site.theme),
   }, null, 2);
 
-  for (const [name, body] of Object.entries(files)) {
-    const type = name.endsWith(".xml") ? "application/xml; charset=utf-8"
-      : name.endsWith(".json") ? "application/json; charset=utf-8"
-      : name.endsWith(".css") ? "text/css; charset=utf-8"
-      : "text/html; charset=utf-8";
-    await store.putText(name, body, type);
-  }
+  // contentType() is the renderer's own table. A local copy here once lacked .js
+  // and .svg, so search.js and gallery.js were stored as text/html -- which
+  // `nosniff` makes the browser refuse to execute.
+  await inPool(Object.entries(files), ([name, body]) => store.putText(name, body, contentType(name)));
 
   // The template's own assets are copied server-side from the platform bucket
   // into this site's staging bucket, so the bytes never pass through here and a
@@ -1049,17 +1085,9 @@ async function routeApi({ method, segments, query, headers, body }) {
   // there is one list, one editor and one publish path rather than three.
   if (head === "articles") {
     if (method === "GET" && !second) {
-      const list = (await allArticles(store))
-        .map((a) => normalizeContent(a))
-        .map((a) => ({
-          slug: a.slug, type: a.type, status: a.status,
-          title: a.title, dek: a.dek, date: a.date ?? "",
-          category: a.category, categoryLabel: a.categoryLabel,
-          nav: a.nav ?? null, updatedAt: a.updatedAt,
-        }))
-        // Pages have no date, so they sort after the dated stream rather than
-        // ahead of everything on an empty string.
-        .sort((x, y) => (y.date || "0").localeCompare(x.date || "0") || x.title.localeCompare(y.title));
+      // Pages have no date, so they sort after the dated stream rather than
+      // ahead of everything on an empty string.
+      const list = (await listSummaries(store)).sort(compareSummaries);
       return json(200, list);
     }
 

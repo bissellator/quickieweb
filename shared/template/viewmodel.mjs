@@ -9,6 +9,7 @@
 // docs/TEMPLATE-SPEC.md is generated from these tables.
 
 import { esc, sanitizeHtml, absUrl } from "../html.mjs";
+import { extractImages } from "../content.mjs";
 
 // --------------------------------------------------------------- the shapes
 // "string" | "boolean" | "number" | "<shape>" | "<shape>[]" | "<shape>|null"
@@ -29,11 +30,24 @@ export const SHAPES = {
     date: "string", dateDisplay: "string", dateIso: "string",
     category: "string", categorySlug: "string", categoryLabel: "string",
     bodyHtml: "string", pullQuote: "string", tags: "string[]",
+    // The same tags, linkable: where the `tag` layout renders each one.
+    tagRefs: "tagRef[]",
     isPodcast: "boolean", isGallery: "boolean",
     source: "source|null", audio: "audio|null",
     images: "image[]", cover: "image|null",
+    // The <img>s inside bodyHtml, in order -- read out, not removed. For a post
+    // whose pictures sit between its paragraphs, which `images` never holds.
+    bodyImages: "image[]",
+    // The neighbouring posts in index order (newest first). null at either end,
+    // and on a post the site's listings leave out.
+    newer: "postLink|null", older: "postLink|null",
     seo: "seo",
   },
+  postLink: { slug: "string", url: "string", title: "string", dateDisplay: "string" },
+  // One tag across the site. `url` is where the `tag` layout renders it, so it
+  // is only a live link when the template has one.
+  tagInfo: { name: "string", slug: "string", url: "string", count: "number" },
+  tagRef: { name: "string", slug: "string", url: "string" },
   page: {
     type: "string", slug: "string", url: "string", absUrl: "string",
     title: "string", dek: "string", bodyHtml: "string",
@@ -48,6 +62,8 @@ export const SHAPES = {
     // 0 when unknown. A template writing width/height only when they are
     // truthy reserves the box and stops the grid reflowing as images load.
     width: "number", height: "number",
+    // A smaller rendition for grids and cards; the full image when there is none.
+    thumbUrl: "string",
   },
   audio: {
     url: "string", absUrl: "string", mimeType: "string",
@@ -58,7 +74,7 @@ export const SHAPES = {
 
 // What each layout gets on top of the common roots.
 export const COMMON_ROOTS = {
-  site: "site", nav: "navItem[]", pages: "page[]", posts: "post[]",
+  site: "site", nav: "navItem[]", pages: "page[]", posts: "post[]", tags: "tagInfo[]",
   theme: "theme", build: "build", template: "templateInfo",
   // Per-page metadata. Present in every layout so one `head` partial serves all
   // of them; the renderer fills it from the post, the page, or the site.
@@ -72,7 +88,7 @@ export const LAYOUT_ROOTS = {
   page: { page: "page" },
   "404": {},
   archive: {},
-  tag: { tag: "string", posts: "post[]" },
+  tag: { tag: "tagInfo", posts: "post[]" },
 };
 
 // --------------------------------------------------- static path resolution
@@ -84,6 +100,20 @@ function typeOfScope(layout, scope) {
   if (!scope) return null;
   const res = resolveViewPath(layout, scope.replace(/\[\]$/, ""), { scope: null });
   return res.ok ? baseType(res.type) : null;
+}
+
+// The item type of an {{#each}} scope read from inside a shape -- a partial's
+// declared context -- rather than from the layout roots. `bodyImages[]` inside a
+// `post` partial is an `image`. Lists along the way are stepped through, since
+// each `[]` in the scope is a loop that already did the iterating.
+function typeOfScopeIn(shapeName, scope) {
+  let type = shapeName;
+  for (const key of scope.replace(/\[\]/g, "").split(".")) {
+    const shape = SHAPES[baseType(type)];
+    if (!shape || !Object.hasOwn(shape, key)) return null;
+    type = shape[key];
+  }
+  return baseType(type);
 }
 
 /**
@@ -130,11 +160,16 @@ export function resolveViewPath(layout, path, { scope = null, scopeType: forcedS
     return { ok: true, type };
   };
 
-  // 1. the innermost {{#each}} item, or the context a partial declared
-  const scopeType = forcedScope ?? (scope ? typeOfScope(layout, scope) : null);
-  if (scopeType && SHAPES[scopeType] && Object.hasOwn(SHAPES[scopeType], parts[0])) {
-    return walkFrom(SHAPES[scopeType][parts[0]], 1);
+  // 1. the innermost {{#each}} item, then the context a partial declared. The
+  //    engine resolves through the same stack: a loop inside a `post` partial
+  //    reads the item first and falls back to the post.
+  const loopType = scope
+    ? (forcedScope ? typeOfScopeIn(forcedScope, scope) ?? typeOfScope(layout, scope) : typeOfScope(layout, scope))
+    : null;
+  for (const t of [loopType, forcedScope]) {
+    if (t && SHAPES[t] && Object.hasOwn(SHAPES[t], parts[0])) return walkFrom(SHAPES[t][parts[0]], 1);
   }
+  const scopeType = loopType ?? forcedScope;
 
   // 2. the layout roots
   if (!Object.hasOwn(roots, parts[0])) {
@@ -205,6 +240,21 @@ export const linkTo = (path, base = "") => `${base}${String(path).replace(/^\/+/
 /** Kept for the file name; the link version is linkTo(pathFor(record), base). */
 export const urlFor = (record) => `/${record.slug}.html`;
 
+// Tag pages live one directory down, so a page rendered there is drawn with a
+// base of "../" (or the preview prefix) -- see renderSite.
+export const tagSlug = (name) =>
+  String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "tag";
+export const tagPathFor = (name) => `tags/${tagSlug(name)}.html`;
+
+/** Every tag on the given posts, most-used first, then alphabetically. */
+export function buildTags(posts, base = "") {
+  const counts = new Map();
+  for (const p of posts) for (const t of new Set(p.tags ?? [])) counts.set(t, (counts.get(t) ?? 0) + 1);
+  return [...counts]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([name, count]) => ({ name, slug: tagSlug(name), url: linkTo(tagPathFor(name), base), count }));
+}
+
 /**
  * JSON-LD arrives pre-wrapped in its <script> tag, written by {{{seo.jsonLd}}}.
  * Templates are not allowed literal <script> elements, and structured data is
@@ -251,14 +301,22 @@ export function websiteJsonLd(site) {
 
 export function projectPost(record, site, base = "") {
   const url = linkTo(pathFor(record), base);
-  const images = (record.images ?? []).map((i) => ({
+  const projectImage = (i) => ({
     url: linkTo(i.url, base),
     absUrl: absUrl(site.baseUrl, i.url),
     alt: i.alt ?? "",
     caption: i.caption ?? "",
     width: i.width ?? 0,
     height: i.height ?? 0,
-  }));
+    thumbUrl: linkTo(i.thumb || i.url, base),
+  });
+  const images = (record.images ?? []).map(projectImage);
+  const bodyHtml = sanitizeHtml(record.body ?? "");
+  // Only site-relative sources are linked against the base; an absolute URL in
+  // a body (a hotlinked image) is passed through as written.
+  const bodyImages = extractImages(bodyHtml).images.map((i) => /^https?:\/\//i.test(i.url)
+    ? { ...projectImage(i), url: i.url, absUrl: i.url, thumbUrl: i.thumb || i.url }
+    : projectImage(i));
   return {
     type: record.type,
     slug: record.slug,
@@ -275,14 +333,19 @@ export function projectPost(record, site, base = "") {
     categoryLabel: record.categoryLabel ?? "",
     // Raw HTML from the editor, sanitized once here so every template that
     // writes {{{post.bodyHtml}}} is safe by construction rather than by care.
-    bodyHtml: sanitizeHtml(record.body ?? ""),
+    bodyHtml,
     pullQuote: record.pullQuote ?? "",
     tags: record.tags ?? [],
+    tagRefs: (record.tags ?? []).map((name) => ({ name, slug: tagSlug(name), url: linkTo(tagPathFor(name), base) })),
     isPodcast: record.type === "podcast",
     isGallery: record.type === "gallery",
     images: images,
     // The first image stands in for the post: a card thumbnail, an og:image.
     cover: images[0] ?? null,
+    bodyImages,
+    // Filled by renderSite, which is the only place that knows the order.
+    newer: null,
+    older: null,
     source: record.source ?? null,
     audio: record.audio
       ? {
@@ -404,9 +467,9 @@ export function buildViewModel({ site, template, theme, posts, pages, nav = [], 
       stylesheets: ["assets/theme.css", ...(template.manifest.styles ?? []).map((s) => `assets/${s.split("/").pop()}`)]
         .map((u) => linkTo(u, base)),
       // search.js and gallery.js are prepended by the platform, not declared by
-      // the template. A template renders {{#each template.scripts}} and gets both
-      // behaviours without shipping any JavaScript of its own -- which matters
-      // because the validator forbids templates from carrying <script> at all.
+      // the template; the template's own `scripts` follow them. All of it arrives
+      // through {{#each template.scripts}} -- the validator refuses any other
+      // <script> -- so the URLs come from here, never from a template's markup.
       scripts: [
         linkTo("assets/search.js", base),
         linkTo("assets/gallery.js", base),
@@ -417,6 +480,7 @@ export function buildViewModel({ site, template, theme, posts, pages, nav = [], 
     posts,
     pages,
     nav,
+    tags: buildTags(posts, base),
   };
 }
 

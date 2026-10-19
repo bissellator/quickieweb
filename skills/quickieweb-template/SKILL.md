@@ -74,7 +74,7 @@ model, the answer is to add it to `shared/template/viewmodel.mjs` (and its
 
 ## Two rules the validator will not let you break
 
-**No JavaScript of your own.** Exactly one `<script>` form is allowed:
+**No script the markup names itself.** Exactly one `<script>` form is allowed:
 
 ```handlebars
 {{#each template.scripts}}<script src="{{.}}" defer></script>{{/each}}
@@ -83,6 +83,12 @@ model, the answer is to add it to `shared/template/viewmodel.mjs` (and its
 The URL comes from the view model, never from you. An inline body or a literal
 `src` is refused. Structured data is already `{{{seo.jsonLd}}}`, wrapped in its
 own tag.
+
+A template may still ship its own `.js`: list it in the manifest's `"scripts"`
+and it arrives through that same loop, after the platform's. It may read the
+site's `articles.json` (every post's images, tags, URLs) to build slideshows or
+filters -- but the page must read completely without it. See "Scripts" in
+docs/TEMPLATE-SPEC.md.
 
 Rendering `template.scripts` is also how a template gets **search**, which the
 platform supplies. Add the three hooks and it works:

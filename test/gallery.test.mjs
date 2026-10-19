@@ -63,7 +63,7 @@ test("images are extracted from the editor body, and the prose survives", () => 
   });
   assert.equal(r.body, "<p>Notes from the coast.</p>", "prose is kept, empty shells are not");
   assert.equal(r.images.length, 2);
-  assert.deepEqual(r.images[0], { url: "1.jpg", alt: "Pier", caption: "", width: 800, height: 600 });
+  assert.deepEqual(r.images[0], { url: "1.jpg", alt: "Pier", caption: "", width: 800, height: 600, thumb: "" });
   // title -> caption is the ohshelly convention and the only attribute a
   // rich-text editor offers for one.
   assert.equal(r.images[1].caption, "Low tide");

@@ -12,6 +12,12 @@ just an AST walked against a fixed data model.
 Everything else in this document follows from that, or from a second rule:
 **reading a page must not require JavaScript.** A template produces real HTML.
 
+That rule is about the *renderer* and about *readers*, not a ban on browser
+code. A template may ship its own scripts (see [Scripts](#scripts)) to build
+slideshows, filters and the like from the site's `articles.json` — they run in
+the reader's browser, never in the renderer, and the page they enhance must
+still read without them.
+
 Check your work with:
 
 ```bash
@@ -63,6 +69,7 @@ Layout and partial filenames are yours; the manifest maps names to paths.
     "card": { "path": "partials/card.html", "context": "post" }
   },
   "styles": ["assets/style.css"],
+  "scripts": ["assets/site.js"],
 
   "tokens": {
     "color.ink": { "type": "color", "default": "#14161a", "label": "Body text", "group": "Color" }
@@ -79,6 +86,11 @@ Layout and partial filenames are yours; the manifest maps names to paths.
   when the partial is rendered inside `{{#each posts}}` and reads bare fields —
   without it the validator has no way to know what `{{title}}` means and cannot
   check it.
+- **`scripts`** optional `.js` files in the package. See [Scripts](#scripts).
+- **`layouts.archive`** / **`layouts.tag`** optional. When present the renderer
+  writes `archive.html`, and one `tags/<slug>.html` per tag on a listed post.
+  A tag page is one directory down and is drawn with a base of `../`, so every
+  URL in the model already points the right way; never hardcode a root path.
 
 ---
 
@@ -131,6 +143,7 @@ Engine: `quickieweb-template@1`
 | `nav` | `navItem[]` |
 | `pages` | `page[]` |
 | `posts` | `post[]` |
+| `tags` | `tagInfo[]` |
 | `theme` | `theme` |
 | `build` | `build` |
 | `template` | `templateInfo` |
@@ -165,7 +178,7 @@ Nothing beyond the common roots.
 **`tag`** (optional)
 | Path | Type |
 |---|---|
-| `tag` | `string` |
+| `tag` | `tagInfo` |
 | `posts` | `post[]` |
 
 Required layouts: `index`, `article`, `page`, `404`.
@@ -242,13 +255,43 @@ Optional layouts: `archive`, `tag`, `gallery`.
 | `bodyHtml` | `string` |
 | `pullQuote` | `string` |
 | `tags` | `string[]` |
+| `tagRefs` | `tagRef[]` |
 | `isPodcast` | `boolean` |
 | `isGallery` | `boolean` |
 | `source` | `source\|null` |
 | `audio` | `audio\|null` |
 | `images` | `image[]` |
 | `cover` | `image\|null` |
+| `bodyImages` | `image[]` |
+| `newer` | `postLink\|null` |
+| `older` | `postLink\|null` |
 | `seo` | `seo` |
+
+**`postLink`**
+
+| Field | Type |
+|---|---|
+| `slug` | `string` |
+| `url` | `string` |
+| `title` | `string` |
+| `dateDisplay` | `string` |
+
+**`tagInfo`**
+
+| Field | Type |
+|---|---|
+| `name` | `string` |
+| `slug` | `string` |
+| `url` | `string` |
+| `count` | `number` |
+
+**`tagRef`**
+
+| Field | Type |
+|---|---|
+| `name` | `string` |
+| `slug` | `string` |
+| `url` | `string` |
 
 **`page`**
 
@@ -286,6 +329,7 @@ Optional layouts: `archive`, `tag`, `gallery`.
 | `caption` | `string` |
 | `width` | `number` |
 | `height` | `number` |
+| `thumbUrl` | `string` |
 
 **`audio`**
 
@@ -427,7 +471,7 @@ lists everything, and `?q=` in the URL so a search is shareable.
 
 | Rule | Why |
 |---|---|
-| `<script>` only as `<script src="{{…}}">` with no body | Reading a page must not need JavaScript. The one permitted form takes its URL from the view model — `{{#each template.scripts}}` — so a template ships no JavaScript of its own. Structured data is `{{{seo.jsonLd}}}`, already wrapped. |
+| `<script>` only as `<script src="{{…}}">` with no body | Reading a page must not need JavaScript. The one permitted form takes its URL from the view model — `{{#each template.scripts}}` — so the markup never names a script; the manifest's `scripts` does. Structured data is `{{{seo.jsonLd}}}`, already wrapped. |
 | No external `href`/`src` (`https://…`) on assets | Templates are self-contained. A third-party request is a dependency and a tracking vector nobody chose. |
 | No `@import` of a remote stylesheet | Same. |
 | Every `{{> name}}` is declared in `partials` | A missing partial is a render-time 500 across the whole site. |
@@ -479,6 +523,47 @@ index card.
 A gallery renders through your `article` layout. Declare an optional `gallery`
 layout only if you want it to look different — there is no obligation, and
 `supports` is what says you handle the type at all.
+
+---
+
+## Scripts
+
+Declare package `.js` files in `"scripts"` and render
+`{{#each template.scripts}}<script src="{{.}}" defer></script>{{/each}}` — the
+platform's search and gallery clients come first in that list, yours after. They
+are served from the site's own `assets/`, like the stylesheet.
+
+What a script can read, all site-relative and generated on every build:
+
+| File | What is in it |
+|---|---|
+| `articles.json` | `posts[]` (newest first: `slug`, `url`, `date`, `title`, `dek`, `category`, `categoryLabel`, `type`, `tags`, `images[]` of `{ url, thumbUrl, width, height, alt, caption }`), `pages[]`, `tags[]` of `{ name, slug, url, count }`. URLs are relative to the site root. |
+| `search-index.json` | The search corpus. Prefer `assets/search.js` over reading it yourself. |
+| `taxonomy.json` | The site's categories and the active theme form. |
+
+Rules that keep this safe for a shared library:
+
+- **Progressive enhancement only.** Render the real thing in the layout — the
+  grid, the list, the prev/next links — and let the script improve it. With
+  JavaScript off the page must still be complete.
+- **Same-origin data only.** Fetch the files above, nothing else. External
+  requests are refused for assets and are no better from a script.
+- **Library templates are shared code.** A script in a library template runs on
+  every site that picks it. Private (site) templates are the place for one
+  site's behaviour.
+
+Post pages also get `post.newer` / `post.older` (`{ slug, url, title,
+dateDisplay }` or `null`), in index order, so prev/next needs no script at all.
+Every layout gets `tags`, the site's tags with counts, for filter links.
+
+Images carry `thumbUrl`: the recorded thumbnail, or the full image when there is
+none. Console uploads record theirs automatically.
+
+`post.bodyImages` lists the `<img>`s inside `post.bodyHtml`, in order, without
+removing them — for posts whose pictures sit between paragraphs. Use
+`{{#each post.bodyImages}}{{#if @first}}…{{/if}}{{/each}}` for a card thumbnail.
+In `articles.json` a post's `images` is its gallery set or, failing that, these.
+A `data-thumb` attribute on an `<img>` names its thumbnail.
 
 ---
 

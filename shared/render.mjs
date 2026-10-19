@@ -15,6 +15,7 @@ import { render } from "./template/engine.mjs";
 import { resolveTokens, tokensToCss } from "./template/tokens.mjs";
 import {
   buildViewModel, buildNav, projectPost, projectPage, urlFor, siteSeo, websiteJsonLd,
+  buildTags, tagPathFor,
 } from "./template/viewmodel.mjs";
 import { isDated, publishedOnly, sortContent } from "./content.mjs";
 import { listedAt } from "./site.mjs";
@@ -91,11 +92,41 @@ export function renderSite({ template, site, theme = {}, records = [], access = 
   // Requiring a `gallery` layout instead would invalidate every template ever
   // written against this engine, to no reader's benefit.
   const layoutFor = (post) => (post.isGallery && template.layouts.gallery ? "gallery" : "article");
+  // Neighbours come from the LISTED order, so prev/next never leads a reader to
+  // a post the index itself hides from them.
+  const listedAtIndex = new Map(postRecords.map((r, i) => [r.slug, i]));
+  const linkOf = (p) => (p ? { slug: p.slug, url: p.url, title: p.title, dateDisplay: p.dateDisplay } : null);
   for (const post of allPostRecords.map((r) => projectPost(r, site, base))) {
+    const i = listedAtIndex.get(post.slug);
+    if (i !== undefined) {
+      post.newer = linkOf(posts[i - 1]);
+      post.older = linkOf(posts[i + 1]);
+    }
     draw(layoutFor(post), `${post.slug}.html`, { post, seo: post.seo }, post.url);
   }
   for (const page of allPageRecords.map((r) => projectPage(r, site, base))) {
     draw("page", `${page.slug}.html`, { page, seo: page.seo }, page.url);
+  }
+
+  // ---- optional layouts: rendered only when the template provides them
+  if (template.layouts.archive) {
+    draw("archive", "archive.html", {
+      seo: siteSeo(site, { title: `Archive${site.shortName ? ` - ${site.shortName}` : ""}`, url: "/archive.html" }),
+    }, "/archive.html");
+  }
+  if (template.layouts.tag) {
+    // One directory down, so relative links climb back out. A preview's base is
+    // already absolute and serves unchanged.
+    const tagBase = base || "../";
+    const tagPosts = postRecords.map((r) => projectPost(r, site, tagBase));
+    for (const tag of buildTags(tagPosts, tagBase)) {
+      const file = tagPathFor(tag.name);
+      draw("tag", file, {
+        tag,
+        posts: tagPosts.filter((p) => p.tags.includes(tag.name)),
+        seo: siteSeo(site, { title: `${tag.name}${site.shortName ? ` - ${site.shortName}` : ""}`, url: `/${file}` }),
+      }, `/${file}`, tagBase);
+    }
   }
 
   draw("index", "index.html", {
@@ -250,13 +281,23 @@ ${items}
 `;
 }
 
+// The site's machine-readable manifest. A template's own scripts read it to build
+// galleries, slideshows and filters in the browser, so it carries what those
+// need: every post's images and the site's tags. URLs are relative to the site
+// root, the directory this file is served from.
 function indexJson(posts, pages) {
   return JSON.stringify({
     posts: posts.map((p) => ({
       slug: p.slug, url: p.url, date: p.date, title: p.title, dek: p.dek,
       category: p.category, categoryLabel: p.categoryLabel, type: p.type, tags: p.tags,
+      // A gallery's set, or failing that the pictures inline in the body: a
+      // script building a slideshow wants every image a post shows.
+      images: (p.images.length ? p.images : p.bodyImages).map((i) => ({
+        url: i.url, thumbUrl: i.thumbUrl, width: i.width, height: i.height, alt: i.alt, caption: i.caption,
+      })),
     })),
     pages: pages.map((p) => ({ slug: p.slug, url: p.url, title: p.title })),
+    tags: buildTags(posts).map(({ name, slug, url, count }) => ({ name, slug, url, count })),
   }, null, 2);
 }
 

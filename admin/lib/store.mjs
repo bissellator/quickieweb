@@ -207,9 +207,20 @@ export function storeFor(site) {
     return { upload, delete: del };
   }
 
+  // A template or theme change re-renders every page, and on a site of a few
+  // hundred posts copying them one at a time outran the request timeout.
+  const POOL = 32;
+  async function inPool(items, fn) {
+    let next = 0;
+    const worker = async () => {
+      while (next < items.length) await fn(items[next++]);
+    };
+    await Promise.all(Array.from({ length: Math.min(POOL, items.length) }, worker));
+  }
+
   async function publish({ upload, delete: del }, onLog = () => {}) {
     const copied = [];
-    for (const key of upload) {
+    await inPool(upload, async (key) => {
       await s3.send(new CopyObjectCommand({
         Bucket: LIVE,
         Key: k(key),
@@ -218,14 +229,14 @@ export function storeFor(site) {
       }));
       copied.push(key);
       onLog(`copied ${key}`);
-    }
+    });
 
     const removed = [];
-    for (const key of del) {
+    await inPool(del, async (key) => {
       await s3.send(new DeleteObjectCommand({ Bucket: LIVE, Key: k(key) }));
       removed.push(key);
       onLog(`deleted ${key}`);
-    }
+    });
 
     let invalidation = null;
     if (DISTRIBUTION_ID && (copied.length || removed.length)) {
