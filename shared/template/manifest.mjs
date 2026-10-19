@@ -150,6 +150,9 @@ export function checkManifest(raw) {
     if (!PKG_PATH_RE.test(String(f))) problems.push(`"scripts" entry "${f}" is not a safe package path`);
     else if (!String(f).endsWith(".js")) problems.push(`"scripts" entry "${f}" must be a .js file`);
   }
+  if (m.platformAssets !== undefined && typeof m.platformAssets !== "boolean") {
+    problems.push('"platformAssets" must be true or false');
+  }
   for (const f of m.webfonts ?? []) {
     if (!f?.family) problems.push('each "webfonts" entry needs a "family"');
     if (!PKG_PATH_RE.test(String(f?.src ?? ""))) {
@@ -168,6 +171,11 @@ export function checkManifest(raw) {
       styles: m.styles ?? [],
       scripts: m.scripts ?? [],
       webfonts: m.webfonts ?? [],
+      // false: the site ships nothing of the platform's own -- no search or
+      // gallery client, no default favicon, no generated-file banners. For a
+      // site that must not be traceable to the installation serving it; the
+      // template (or static files) supply whatever it needs instead.
+      platformAssets: m.platformAssets !== false,
     },
     problems,
   };

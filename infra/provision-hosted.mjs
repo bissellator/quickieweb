@@ -36,6 +36,7 @@ import path from "node:path";
 
 import { loadConfig, reportConfigError } from "../cli/lib/config.mjs";
 import { buildRouterSource, routerConfig, routerName } from "./lib/edge-function.mjs";
+import { withMirrors } from "./lib/mirror-policy.mjs";
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -348,10 +349,13 @@ if (!STATUS_ONLY && dist) {
 
   for (const [bucket, file] of [[LIVE, "tenant-live-bucket-policy.json"], [STAGING, "tenant-staging-bucket-policy.json"]]) {
     const raw = await readFile(path.join(ROOT, "infra", "iam", file), "utf8");
-    const doc = JSON.parse(fill(raw.replaceAll("__BUCKET__", bucket)));
+    let doc = JSON.parse(fill(raw.replaceAll("__BUCKET__", bucket)));
     // The "//" keys are documentation for the repo; IAM rejects them.
     delete doc["//"];
     for (const st of doc.Statement) delete st["//"];
+    // Custom-domain mirrors (infra/wire-mirror.mjs) keep their prefix-scoped
+    // read; without this, re-provisioning would cut every custom domain off.
+    if (bucket === LIVE) doc = withMirrors(doc, { bucket, account: ACCOUNT, mirrors: config.hosted?.mirrors ?? [] });
     await aws(["s3api", "put-bucket-policy", "--bucket", bucket, "--policy", JSON.stringify(doc)]);
     log(`${bucket}: ${doc.Statement.length} statements applied`);
   }

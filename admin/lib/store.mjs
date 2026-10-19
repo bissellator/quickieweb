@@ -270,7 +270,28 @@ export function storeFor(site) {
         : `invalidated ${paths.length} path(s)`);
     }
 
-    return { copied: copied.length, removed: removed.length, invalidation };
+    // A mirror is a distribution of the site's own (a custom domain) whose
+    // origin path IS this site's prefix, so its cache keys are the reader's URLs
+    // -- /index.html, not /sites/acme/index.html -- and the whole distribution is
+    // this site's, so its wildcard is /*. Without this it would serve the
+    // previous publish for as long as the CDN caches (a year).
+    const mirrors = [];
+    for (const id of st.mirrorDistributionIds ?? []) {
+      if (!(copied.length || removed.length)) break;
+      const touched = [...copied, ...removed].map((key) => `/${key}`);
+      const paths = touched.length > 15 ? ["/*"] : touched;
+      const res = await cf.send(new CreateInvalidationCommand({
+        DistributionId: id,
+        InvalidationBatch: {
+          CallerReference: `publish-${site.siteId}-${id}-${Date.now()}`,
+          Paths: { Quantity: paths.length, Items: paths },
+        },
+      }));
+      mirrors.push(res.Invalidation?.Id ?? null);
+      onLog(`invalidated ${paths.length === 1 && paths[0] === "/*" ? "/*" : `${paths.length} path(s)`} on ${id}`);
+    }
+
+    return { copied: copied.length, removed: removed.length, invalidation, mirrors };
   }
 
   return {

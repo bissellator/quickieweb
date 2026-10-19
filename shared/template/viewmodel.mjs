@@ -470,11 +470,11 @@ export function buildViewModel({ site, template, theme, posts, pages, nav = [], 
       // the template; the template's own `scripts` follow them. All of it arrives
       // through {{#each template.scripts}} -- the validator refuses any other
       // <script> -- so the URLs come from here, never from a template's markup.
+      // A template with `platformAssets: false` gets only its own.
       scripts: [
-        linkTo("assets/search.js", base),
-        linkTo("assets/gallery.js", base),
-        ...(template.manifest.scripts ?? []).map((s) => linkTo(`assets/${s.split("/").pop()}`, base)),
-      ],
+        ...(template.manifest.platformAssets === false ? [] : ["assets/search.js", "assets/gallery.js"]),
+        ...(template.manifest.scripts ?? []).map((s) => `assets/${s.split("/").pop()}`),
+      ].map((u) => linkTo(u, base)),
     },
     theme: nestTokens(theme),
     posts,

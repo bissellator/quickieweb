@@ -150,9 +150,12 @@ export function tokensToCss(manifest, theme) {
   font-display: swap;
 }`).join("\n");
 
-  return `/* Generated from template "${escCss(manifest.id)}" tokens and this site's theme.
+  // No banner for a template that opted out of platform assets: it names the
+  // tooling, and that site must not be traceable to it.
+  const banner = manifest.platformAssets === false ? "" : `/* Generated from template "${escCss(manifest.id)}" tokens and this site's theme.
    Do not edit: cli/build.mjs and the admin both overwrite it on every build. */
-${faces ? `${faces}\n\n` : ""}:root {
+`;
+  return `${banner}${faces ? `${faces}\n\n` : ""}:root {
 ${lines.join("\n")}
 }
 `;

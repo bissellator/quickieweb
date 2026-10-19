@@ -265,11 +265,15 @@ export async function seedSite({
         }
       }
       // The favicon the templates link to. Without it every page load logs a 403.
-      for (const bucket of both) {
-        await aws(["s3", "cp", path.join(root, "assets", "favicon.svg"), `s3://${bucket}/${keyFor(record.storage, "assets/favicon.svg")}`,
-          "--content-type", "image/svg+xml", "--cache-control", assetCache]);
+      // Not for a template that opted out of platform assets: it brings its own.
+      const platform = template.manifest.platformAssets !== false;
+      if (platform) {
+        for (const bucket of both) {
+          await aws(["s3", "cp", path.join(root, "assets", "favicon.svg"), `s3://${bucket}/${keyFor(record.storage, "assets/favicon.svg")}`,
+            "--content-type", "image/svg+xml", "--cache-control", assetCache]);
+        }
       }
-      log(`wrote ${template.assets.length + 1} asset(s)`);
+      log(`wrote ${template.assets.length + (platform ? 1 : 0)} asset(s)`);
     }
 
     // ------------------------------------------------------------------ registry
@@ -312,6 +316,14 @@ export async function seedSite({
       log(`${res.Invalidation.Id} for /${record.storage.prefix}*`);
     } else {
       log(dry ? "skipped (dry run)" : "no distribution configured");
+    }
+    // Custom-domain mirrors cache by the reader's URL; the whole distribution is
+    // this site's, so /* (store.publish explains).
+    for (const id of dry ? [] : record.storage.mirrorDistributionIds ?? []) {
+      const res = JSON.parse((await execFileAsync("aws", ["cloudfront", "create-invalidation",
+        "--distribution-id", id, "--paths", "/*",
+        "--region", "us-east-1", "--output", "json"], { maxBuffer: 8e6 })).stdout);
+      log(`${res.Invalidation.Id} for /* on mirror ${id}`);
     }
 
     console.log(`\n${dry ? "dry run complete." : `live at ${record.site.baseUrl}`}`);

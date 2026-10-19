@@ -170,12 +170,19 @@ export function renderSite({ template, site, theme = {}, records = [], access = 
   // created through the console had no assets/favicon.svg at all, so an S3
   // origin behind OAC answered every page load with a 403 for it. Generating a
   // plain default beats shipping one per template or 403ing forever.
-  files["assets/favicon.svg"] = defaultFavicon(site, resolved);
-  // Browsers ask for /favicon.ico whether or not a page links one, and an S3
-  // origin behind OAC answers a miss with 403 -- a red console line on every
-  // single page load. The same SVG bytes served at that path silence it; the
-  // content type is what browsers honour, not the extension.
-  files["favicon.ico"] = files["assets/favicon.svg"];
+  //
+  // `platformAssets: false` opts out of this and of the search and gallery
+  // clients below: that site supplies its own icon (a static file) and ships
+  // nothing that names the platform.
+  const platform = template.manifest.platformAssets !== false;
+  if (platform) {
+    files["assets/favicon.svg"] = defaultFavicon(site, resolved);
+    // Browsers ask for /favicon.ico whether or not a page links one, and an S3
+    // origin behind OAC answers a miss with 403 -- a red console line on every
+    // single page load. The same SVG bytes served at that path silence it; the
+    // content type is what browsers honour, not the extension.
+    files["favicon.ico"] = files["assets/favicon.svg"];
+  }
 
   // ---- search
   //
@@ -187,7 +194,7 @@ export function renderSite({ template, site, theme = {}, records = [], access = 
   // supplies the index and the behaviour, the template supplies the markup and
   // the styling. Exactly the split design tokens use.
   files["search-index.json"] = JSON.stringify(buildSearchIndex([...posts, ...pages]));
-  files["assets/search.js"] = CLIENT_SOURCE;
+  if (platform) files["assets/search.js"] = CLIENT_SOURCE;
 
   // ---- galleries
   //
@@ -195,7 +202,7 @@ export function renderSite({ template, site, theme = {}, records = [], access = 
   // search: it does nothing on a page with no [data-qw-gallery] in it, and
   // making the file set depend on what happens to be published means a site
   // gains and loses files as posts come and go.
-  files["assets/gallery.js"] = GALLERY_CLIENT;
+  if (platform) files["assets/gallery.js"] = GALLERY_CLIENT;
   files["feed.xml"] = feedXml(site, posts);
   const pod = podcastXml(site, posts);
   if (pod) files["podcast.xml"] = pod;

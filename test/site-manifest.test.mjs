@@ -220,3 +220,52 @@ test("a summary carries the list fields, drafts included, never the body", async
   const list = [page, summarizeContent(RECORDS[2]), s, summarizeContent(RECORDS[0])].sort(compareSummaries);
   assert.deepEqual(list.map((x) => x.slug), ["d", "c", "a", "about"]);
 });
+
+// ------------------------------------------------------------ white label
+test("platformAssets: false ships nothing of the platform's own", async () => {
+  const template = await plainWith({ "assets/site.js": "1" }, { scripts: ["assets/site.js"], platformAssets: false });
+  const { files } = renderSite({ template, site, records: RECORDS });
+  for (const gone of ["assets/search.js", "assets/gallery.js", "assets/favicon.svg", "favicon.ico"]) {
+    assert.equal(files[gone], undefined, gone);
+  }
+  assert.doesNotMatch(files["assets/theme.css"], /Generated|cli\/build/);
+  assert.match(files["index.html"], /<script src="assets\/site\.js" defer><\/script>/);
+  assert.doesNotMatch(files["index.html"], /search\.js|gallery\.js/);
+  // The default is unchanged.
+  const normal = renderSite({ template: await plainWith(), site, records: RECORDS }).files;
+  assert.ok(normal["assets/search.js"] && normal["assets/gallery.js"] && normal["favicon.ico"]);
+  assert.match(normal["assets/theme.css"], /^\/\* Generated/);
+});
+
+test("platformAssets must be a boolean", () => {
+  assert.ok(checkManifest({ ...JSON.parse('{"id":"x","name":"x","version":"1.0.0","engine":"quickieweb-template@1","supports":["page"],"layouts":{}}'), platformAssets: "no" })
+    .problems.some((p) => p.includes("platformAssets")));
+});
+
+test("mirror distributions survive normalization; junk ids do not", async () => {
+  const { normalizeStorage } = await import("../shared/site.mjs");
+  const st = normalizeStorage({ driver: "prefix", prefix: "sites/a", mirrorDistributionIds: ["E1IVLQSMM1AGFH", "../x", 7] });
+  assert.deepEqual(st.mirrorDistributionIds, ["E1IVLQSMM1AGFH"]);
+  assert.deepEqual(normalizeStorage({}).mirrorDistributionIds, []);
+});
+
+// ------------------------------------------------------------ custom-domain mirrors
+test("a mirror may read its own site's prefix and nothing else", async () => {
+  const { withMirrors } = await import("../infra/lib/mirror-policy.mjs");
+  const tpl = JSON.parse((await readFile(path.join(ROOT, "infra", "iam", "tenant-live-bucket-policy.json"), "utf8"))
+    .replaceAll("__BUCKET__", "live").replaceAll("__ACCOUNT__", "111").replaceAll("__DISTRIBUTION__", "SHARED1234"));
+  const doc = withMirrors(tpl, { bucket: "live", account: "111", mirrors: [{ distributionId: "MIRROR1234", prefix: "sites/acme/" }] });
+  const allow = doc.Statement.find((s) => s.Sid === "MirrorReadMIRROR1234");
+  assert.equal(allow.Resource, "arn:aws:s3:::live/sites/acme/*");
+  assert.equal(allow.Condition.StringEquals["AWS:SourceArn"], "arn:aws:cloudfront::111:distribution/MIRROR1234");
+  const deny = doc.Statement.find((s) => s.Sid === "DenyAnonymousAndCrossAccount");
+  assert.deepEqual(deny.Condition.StringNotEquals["aws:SourceArn"], [
+    "arn:aws:cloudfront::111:distribution/SHARED1234", "arn:aws:cloudfront::111:distribution/MIRROR1234"]);
+  // The shared grant is untouched, and the template document itself is not mutated.
+  assert.equal(doc.Statement.find((s) => s.Sid === "ReadOnlyFromOurDistribution").Resource, "arn:aws:s3:::live/*");
+  assert.equal(tpl.Statement.length, 3);
+  // A prefix that would open the whole bucket is refused.
+  for (const prefix of ["", "sites/", "/", "sites/acme", "../", "sites/a/b/"]) {
+    assert.throws(() => withMirrors(tpl, { bucket: "live", account: "111", mirrors: [{ distributionId: "MIRROR1234", prefix }] }), /prefix/, prefix);
+  }
+});

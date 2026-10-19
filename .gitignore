@@ -25,3 +25,6 @@ infra/*.zip
 # Generated from config.json by infra/deploy-admin-ui.mjs. Committing it would
 # put the Google client id in two places and let them drift.
 admin/ui/config.json
+
+# infra/wire-mirror.mjs: distribution configs saved before a repoint, for --rollback
+.mirror-backups/

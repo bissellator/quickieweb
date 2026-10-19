@@ -194,7 +194,9 @@ const inline = {
       Sid: "InvalidateOwnDistributions",
       Effect: "Allow",
       Action: ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"],
-      Resource: [...new Set([DIST, config.hosted?.distributionId].filter(Boolean))]
+      // Plus any custom-domain mirrors (a site's storage.mirrorDistributionIds):
+      // each one has to be listed here too, or its publish invalidation is denied.
+      Resource: [...new Set([DIST, config.hosted?.distributionId, ...(config.hosted?.mirrorDistributionIds ?? [])].filter(Boolean))]
         .map((d) => `arn:aws:cloudfront::${ACCOUNT}:distribution/${d}`),
     },
     // The edge access store (infra/provision-access.mjs): who may read which

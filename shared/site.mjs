@@ -127,6 +127,11 @@ export function normalizeStorage(raw = {}) {
     distributionId: str(raw.distributionId),
     distributionDomain: str(raw.distributionDomain),
     logBucket: str(raw.logBucket),
+    // Distributions of the site's own (custom domains) whose origin path is
+    // this site's live prefix. Publish invalidates them too; see store.publish.
+    mirrorDistributionIds: Array.isArray(raw.mirrorDistributionIds)
+      ? raw.mirrorDistributionIds.filter((id) => typeof id === "string" && /^[A-Z0-9]{8,20}$/.test(id))
+      : [],
   };
 
   if (driver === "prefix") {

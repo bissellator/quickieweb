@@ -87,6 +87,11 @@ Layout and partial filenames are yours; the manifest maps names to paths.
   without it the validator has no way to know what `{{title}}` means and cannot
   check it.
 - **`scripts`** optional `.js` files in the package. See [Scripts](#scripts).
+- **`platformAssets`** optional, default `true`. `false` means the site ships
+  nothing of the platform's own: no `assets/search.js` or `assets/gallery.js`
+  (and they are left out of `template.scripts`), no default favicon, and no
+  banner comment in `assets/theme.css`. For a site that must not be traceable to
+  the installation serving it. Supply an icon as a static file.
 - **`layouts.archive`** / **`layouts.tag`** optional. When present the renderer
   writes `archive.html`, and one `tags/<slug>.html` per tag on a listed post.
   A tag page is one directory down and is drawn with a base of `../`, so every
