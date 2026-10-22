@@ -23,7 +23,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 const ALL_VIEWS = ["gate", "emptyView", "articlesView", "editorView", "designView",
-  "adminsView", "securityView", "publishView", "statsView", "aiView"];
+  "adminsView", "securityView", "commentsView", "publishView", "statsView", "aiView"];
 
 /**
  * One place that hides everything, so a new view cannot be forgotten in one of
@@ -228,6 +228,7 @@ const LOADERS = {
   design: () => loadDesign(),
   admins: () => loadAdmins(),
   security: () => loadSecurity(),
+  comments: () => loadComments(),
   publish: () => loadChangeset(),
   stats: () => loadStats(),
   ai: () => loadContract(),
@@ -1369,6 +1370,109 @@ $("applySecurity").addEventListener("click", async () => {
     btn.disabled = false;
   } finally {
     btn.textContent = "Apply and republish";
+  }
+});
+
+// ----------------------------------------------------------------- comments
+// Who may comment, whether a comment waits for approval, and the queue of what
+// is waiting. Unlike Security this does not republish: the setting is read by
+// the Lambda each time it issues an upload ticket, so saving is the whole change.
+//
+// Everything in the queue was written by a stranger. It is put on screen with
+// textContent only, and an upload that fails the readers' checks is shown as
+// its problem, with Reject as the only button.
+let commentsCurrent = null;
+
+const commentChoice = () => ({
+  who: document.querySelector('input[name="commentWho"]:checked')?.value,
+  approval: $("commentApproval").checked,
+});
+
+function commentsStatusText(s) {
+  if (s.who === "off") return "Comments are off.";
+  const who = s.who === "members" ? "Members of this site" : "Anyone who signs in";
+  return `${who} can comment${s.approval ? ", and each comment waits for approval" : ""}.`;
+}
+
+async function loadComments() {
+  err($("commentsErr"), null);
+  const data = await auth.api("/comments");
+  commentsCurrent = data.settings;
+  for (const r of document.querySelectorAll('input[name="commentWho"]')) r.checked = r.value === data.settings.who;
+  $("commentApproval").checked = data.settings.approval;
+  $("saveComments").disabled = true;
+  $("commentsStatus").textContent = commentsStatusText(data.settings);
+  renderPending(data.pending);
+}
+
+function renderPending(items) {
+  const list = $("pendingList");
+  list.replaceChildren();
+  show($("pendingEmpty"), items.length === 0);
+  for (const it of items) {
+    const li = document.createElement("li");
+    const line = (cls, text) => {
+      const p = document.createElement("p");
+      p.className = cls;
+      p.textContent = text;
+      li.append(p);
+    };
+    const when = new Date(it.modified).toLocaleString();
+    line("meta", `${it.author?.name ?? "Unknown"} on ${it.thread ?? "?"} · ${when}`);
+    if (it.problem) {
+      line("problem", `Not a valid comment: ${it.problem}.`);
+    } else if (it.comment.kind === "comment") {
+      if (it.comment.subject) line("subject", it.comment.subject);
+      line("body", it.comment.body);
+    } else {
+      line("body", `${it.comment.kind} of ${it.comment.ref}`);
+    }
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const button = (label, cls, path) => {
+      const b = document.createElement("button");
+      b.className = `btn small ${cls}`;
+      b.textContent = label;
+      b.addEventListener("click", () => moderate(path, it.key, b));
+      actions.append(b);
+    };
+    if (!it.problem) button("Approve", "primary", "/comments/approve");
+    button("Reject", "danger", "/comments/reject");
+    li.append(actions);
+    list.append(li);
+  }
+}
+
+async function moderate(path, key, btn) {
+  btn.disabled = true;
+  err($("commentsErr"), null);
+  try {
+    await auth.api(path, { method: "POST", body: JSON.stringify({ key }) });
+    await loadComments();
+  } catch (e) {
+    err($("commentsErr"), e.message);
+    btn.disabled = false;
+  }
+}
+
+for (const id of ["commentWho", "commentApproval"]) {
+  $(id).addEventListener("change", () => {
+    const c = commentChoice();
+    $("saveComments").disabled = !c.who || !commentsCurrent ||
+      (c.who === commentsCurrent.who && c.approval === commentsCurrent.approval);
+  });
+}
+
+$("saveComments").addEventListener("click", async () => {
+  const btn = $("saveComments");
+  btn.disabled = true;
+  err($("commentsErr"), null);
+  try {
+    await auth.api("/comments/settings", { method: "PUT", body: JSON.stringify(commentChoice()) });
+    await loadComments();
+  } catch (e) {
+    err($("commentsErr"), e.message);
+    btn.disabled = false;
   }
 });
 

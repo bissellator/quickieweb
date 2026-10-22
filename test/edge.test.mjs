@@ -138,6 +138,44 @@ test("only a plain .js file name is served from /__qw/lib/", async () => {
   }
 });
 
+// ------------------------------------------------------------- comments
+const NAME = "20261022T153012123Z-k3m9x2p7q4w8-great-post.json";
+const qs = (r) => Object.fromEntries(Object.entries(r.querystring).map(([k, v]) => [k, v.value]));
+
+test("a comment list becomes an S3 list of this tenant's thread, and nothing else", async () => {
+  const r = await req("acme.quickieweb.com", "/__qw/comments/my-article/",
+    { query: { "start-after": "sites/acme/_comments/my-article/x", prefix: "sites/beta/", delimiter: "/", "list-type": "1" } });
+  assert.equal(r.uri, "/");
+  assert.deepEqual(qs(r), {
+    "list-type": "2",
+    prefix: "sites/acme/_comments/my-article/",
+    "start-after": "sites/acme/_comments/my-article/x",
+  }, "the viewer's own prefix, delimiter and list-type are dropped");
+  assert.equal(qs(await req("quickieweb.com", "/__qw/comments/docs/intro/")).prefix, "sites/www/_comments/docs/intro/");
+});
+
+test("a comment object maps into the thread, by a strict name only", async () => {
+  const r = await req("acme.quickieweb.com", `/__qw/comments/my-article/${NAME}`, { query: { "list-type": "2" } });
+  assert.equal(r.uri, `/sites/acme/_comments/my-article/${NAME}`);
+  assert.deepEqual(r.querystring, {});
+  for (const uri of [
+    "/__qw/comments/", "/__qw/comments//", "/__qw/comments/My-Article/",
+    "/__qw/comments/../_pending/", `/__qw/comments/my-article/../${NAME}`,
+    "/__qw/comments/my-article/notes.txt", `/__qw/comments/${"a".repeat(121)}/`,
+  ]) {
+    const res = await req("acme.quickieweb.com", uri);
+    assert.equal(res.statusCode, 404, `${uri} must be refused`);
+    assert.ok(!res.uri, `${uri} must not reach the origin`);
+  }
+});
+
+test("a protected site's comments need the same sign-in as its pages", async () => {
+  reset({ _secret: SECRET, acme: "viewer" });
+  assert.equal((await req("acme.quickieweb.com", "/__qw/comments/my-article/")).statusCode, 302);
+  const ok = await req("acme.quickieweb.com", "/__qw/comments/my-article/", { cookie: session("acme", "viewer") });
+  assert.equal(ok.uri, "/");
+});
+
 // ------------------------------------------------------------- refusals
 test("an unknown host gets 404, never a default site", async () => {
   for (const host of [

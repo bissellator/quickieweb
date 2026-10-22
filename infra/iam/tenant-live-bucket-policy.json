@@ -14,6 +14,18 @@
       }
     },
     {
+      "//": "Comment threads are listed by the edge (infra/edge/tenant-router.js builds the prefix from the tenant and a checked thread). ListBucket only where the request's prefix is a comment thread: a list with no prefix, or any other prefix, is refused here whatever the edge sends -- this condition, not the router, is what keeps a bucket listing off the internet.",
+      "Sid": "CommentsListFromOurDistribution",
+      "Effect": "Allow",
+      "Principal": { "Service": "cloudfront.amazonaws.com" },
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::__BUCKET__",
+      "Condition": {
+        "StringEquals": { "AWS:SourceArn": "arn:aws:cloudfront::__ACCOUNT__:distribution/__DISTRIBUTION__" },
+        "StringLike": { "s3:prefix": "sites/*/_comments/*" }
+      }
+    },
+    {
       "//": "Everything must arrive over TLS.",
       "Sid": "DenyPlaintext",
       "Effect": "Deny",

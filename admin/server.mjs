@@ -28,11 +28,15 @@ import * as registry from "./lib/registry.mjs";
 import {
   hostToSiteId, checkSiteId, newSiteRecord, normalizeMembers,
   validateMemberChange, canAdminister, canEdit, roleInSite, SITE_ROLES, hostForSite,
-  ACCESS_LEVELS, levelForRole,
+  ACCESS_LEVELS, levelForRole, COMMENT_WHO,
 } from "../shared/site.mjs";
 import { desiredEdgeState, planEdgeSync } from "../shared/access-plan.mjs";
 import { signGrant } from "../shared/access-token.mjs";
 import { edgeConfigured, requireEdge, accessSecret, applyEdgeOps } from "./lib/access-edge.mjs";
+import {
+  commenterFrom, grantRedirect, sessionCookie, CLEAR_SESSION_COOKIE, ticketFor, settingsFrom,
+  listPending, approve, reject,
+} from "./lib/comments.mjs";
 import { processLogs, readReport, readDay, readDetailWindow } from "./lib/stats.mjs";
 import * as oauthStore from "./lib/oauth-store.mjs";
 import {
@@ -651,6 +655,46 @@ async function routeApi({ method, segments, query, headers, body }) {
     return await serveMediaView(segments.slice(1));
   }
 
+  // ---- comments, the reader side (admin/lib/comments.mjs)
+  //
+  // Ahead of requireActor: these are called on the SITE's host by the comments
+  // library, and their credential is the qw_commenter cookie, not a console
+  // session. Host is not forwarded, so the site travels as ?site= and has to
+  // match the one the cookie was signed for.
+  if (head === "comments" && (second === "session" || second === "ticket")) {
+    const siteId = String(query.get("site") ?? "").trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(siteId)) return json(400, { error: "site is required" });
+    const secret = await accessSecret();
+
+    if (second === "session" && method === "GET") {
+      const cookie = sessionCookie({ siteId, grant: query.get("g"), secret });
+      return {
+        status: 302,
+        headers: { location: safeNext(query.get("next")), "cache-control": "no-store" },
+        cookies: [cookie],
+        body: "",
+      };
+    }
+    if (second === "session" && method === "DELETE") {
+      return { ...json(200, { signedOut: true }), cookies: [CLEAR_SESSION_COOKIE] };
+    }
+    if (second === "ticket" && method === "GET") {
+      const site = await registry.getSite(s3, siteId);
+      if (!site) return json(404, { error: "No such site" });
+      const ticket = ticketFor({
+        site,
+        commenter: commenterFrom(headers, siteId, secret),
+        secret,
+        // The function's own role credentials, from the SDK so their expiry
+        // comes with them: S3 refuses a policy once the credentials that signed
+        // it expire, so the ticket is cut short to match.
+        credentials: await s3.config.credentials(),
+      });
+      return json(200, ticket);
+    }
+    return json(405, { error: "Method not allowed" });
+  }
+
   const asJson = () => {
     if (!body || !body.length) return {};
     try { return JSON.parse(body.toString("utf8")); }
@@ -1121,6 +1165,27 @@ async function routeApi({ method, segments, query, headers, body }) {
     });
   }
 
+  // ---- comment sign-in: POST /api/comments/grant  { site, next }
+  //
+  // The sign-in page calls this in its for=comment mode. Like the reader grant
+  // above, it answers with a redirect to the SITE's host carrying a short-lived
+  // grant, where /api/comments/session turns it into a cookie for that host.
+  if (head === "comments" && second === "grant") {
+    if (method !== "POST") return json(405, { error: "POST only" });
+    if (actor.scopes !== null) {
+      return json(403, { error: "An access token cannot sign in to comment. Sign in as a person." });
+    }
+    const b = asJson();
+    const siteId = String(b.site ?? "").trim().toLowerCase();
+    const site = siteId ? await registry.getSite(s3, siteId) : null;
+    if (!site) return json(403, { error: "Comments are not available on this site." });
+    const gateOrigin = HOSTED_DOMAIN ? `https://${hostForSite(siteId, HOSTED_DOMAIN)}` : site.site.baseUrl;
+    return json(200, {
+      redirect: grantRedirect({ site, actor, next: safeNext(b.next), secret: await accessSecret(), gateOrigin }),
+      email: actor.email,
+    });
+  }
+
   // ---- preview links. Issuing one is a normal authenticated, site-scoped act;
   // only the fetching of preview bytes uses the token instead.
   if (head === "preview" && method === "POST") {
@@ -1549,6 +1614,35 @@ async function routeApi({ method, segments, query, headers, body }) {
     }
   }
 
+  // ---- comments: settings and the moderation queue (admin/lib/comments.mjs)
+  //
+  // Site admins only. Everything here works on the LIVE bucket, because that is
+  // where readers upload: _pending/ is waiting, _comments/ is what the edge serves.
+  if (head === "comments") {
+    if (!mayAdminister) return json(403, { error: "Only an owner or admin can manage comments" });
+    const ops = {
+      list: (prefix) => store.list(prefix, store.LIVE),
+      read: (key) => store.getWithMeta(key, store.LIVE),
+      copy: (from, to) => store.copyKeepingMeta(from, to, store.LIVE),
+      remove: (key) => store.remove(key, store.LIVE),
+    };
+    if (method === "GET" && !second) {
+      return json(200, { settings: site.comments, who: COMMENT_WHO, pending: await listPending(ops) });
+    }
+    if (method === "PUT" && second === "settings") {
+      site.comments = settingsFrom(asJson());
+      await registry.putSite(s3, site);
+      return json(200, { settings: site.comments, by: actor.email });
+    }
+    if (method === "POST" && second === "approve") {
+      return json(200, { ...(await approve(ops, asJson().key)), by: actor.email });
+    }
+    if (method === "POST" && second === "reject") {
+      return json(200, { ...(await reject(ops, asJson().key)), by: actor.email });
+    }
+    return json(405, { error: "Method not allowed" });
+  }
+
   // ---- stats: CloudFront access logs, processed on demand
   if (head === "stats") {
     if (!store.LOG_BUCKET) {
@@ -1711,17 +1805,24 @@ export async function handler(event) {
     }
   }
 
+  // Function URLs (payload 2.0) lift cookies out of the headers into their own
+  // array. Put them back, so every route reads one Cookie header wherever it runs.
+  const headers = { ...(event.headers ?? {}) };
+  if (Array.isArray(event.cookies) && event.cookies.length) headers.cookie = event.cookies.join("; ");
+
   const res = await handleRequest({
     method, pathname: rawPath, query,
-    headers: event.headers ?? {}, body,
+    headers, body,
   });
 
   // A Function URL takes binary only as base64; a Buffer handed over as-is would
-  // be serialized as JSON.
+  // be serialized as JSON. Cookies go in their own field: a Function URL
+  // response has one value per header name, and Set-Cookie is the exception.
+  const cookies = res.cookies ? { cookies: res.cookies } : {};
   if (Buffer.isBuffer(res.body)) {
-    return { statusCode: res.status, headers: res.headers, body: res.body.toString("base64"), isBase64Encoded: true };
+    return { statusCode: res.status, headers: res.headers, ...cookies, body: res.body.toString("base64"), isBase64Encoded: true };
   }
-  return { statusCode: res.status, headers: res.headers, body: res.body };
+  return { statusCode: res.status, headers: res.headers, ...cookies, body: res.body };
 }
 
 // ------------------------------------------------------------- local dev only
@@ -1740,7 +1841,7 @@ if (process.env.QW_LOCAL === "1") {
         method: req.method, pathname: url.pathname, query: url.searchParams,
         headers: req.headers, body: chunks.length ? Buffer.concat(chunks) : null,
       });
-    res.writeHead(out.status, out.headers);
+    res.writeHead(out.status, out.cookies ? { ...out.headers, "set-cookie": out.cookies } : out.headers);
     res.end(out.body);
   }).listen(PORT, () => console.log(`admin (local) listening on ${PORT}`));
 }

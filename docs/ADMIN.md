@@ -127,6 +127,59 @@ node infra/deploy-admin-ui.mjs             # the Security tab and the reader sig
 
 Until that is done, every site stays public and the console refuses to protect one.
 
+## Comments
+
+Any page can carry comments by including one shared library, served once for
+every site from the bucket root, so updating it updates every site:
+
+```html
+<script src="https://quickieweb.com/__qw/lib/comments.js"></script>
+<script>
+  const c = QWComments.connect();            // site and thread from the URL; or { site, thread }
+  const { comments, rejected } = await c.load();
+  // c.post({ subject, body })  throws code "signin" -> c.signIn(); returns { pending } when moderated
+  // c.resolve(name) / c.reopen(name) / c.retract(name)
+</script>
+```
+
+The site renders the comments itself. The one rule is to render with
+`textContent`, never `innerHTML`.
+
+**Settings** (the console's **Comments** tab): who may comment (anyone
+signed in, members only, or nobody; the default is anyone signed in) and
+**Requires approval**. Approved and rejected comments are handled in the
+same tab. Commenters see their name shown, never their email.
+
+**No compute on a page view or a comment write.** Reads go through the edge:
+`/__qw/comments/<thread>/` becomes an S3 list of that site's thread, and each
+comment is an immutable object. Writes are browser form uploads straight to
+S3, held to a signed POST policy. The policy, not the library, enforces the
+limits: the key prefix, 1-10,240 bytes, `application/json`, and the
+commenter's uid and name. The Lambda issues one such ticket per commenter per
+hour, at `/api/comments/ticket`, after a sign-in through the same
+`access.html` page (`for=comment`).
+
+**Nothing stored is trusted.** Anyone holding a ticket can upload any bytes
+within those limits. Every reader checks every comment before showing it
+(`shared/comments.mjs`): key shape, author against S3-pinned metadata, claimed
+time against S3's own clock, JSON, schema, length and characters. Anything that
+fails is reported in `rejected` and not shown.
+
+**Approval** issues tickets for `_pending/` instead of `_comments/`. The edge
+never serves `_pending/`, so a waiting comment can't be reached at all, not even
+by its author. Approving copies it across, stamped with the approval time.
+
+### Setting it up (operators, once per installation)
+
+```bash
+node infra/create-deploy-user.mjs --admin-profile <admin>    # bucket CORS and cache-policy permissions
+node infra/provision-access.mjs && node infra/provision-access.mjs --publish  # router: /__qw/lib/, /__qw/comments/
+node infra/wire-comments.mjs --status                         # then without --status
+node infra/build-lambda.mjs && node infra/deploy-lambda.mjs   # ticket, sign-in and moderation routes
+node infra/deploy-admin-ui.mjs                                # the Comments tab, for=comment sign-in
+node infra/deploy-libs.mjs                                    # /__qw/lib/comments.js
+```
+
 ## How authorization actually works
 
 Two separate things, and conflating them is how admin panels get walked into:

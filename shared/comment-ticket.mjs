@@ -47,6 +47,12 @@ export const COMMENT_SESSION_SEC = 43200;
 // do not outlive a few hours either, and S3 refuses a policy once the
 // credentials that signed it have expired, whatever the policy says.
 export const TICKET_SEC = 3600;
+// A ticket never outlives the credentials that signed it, less this much, so a
+// reader is never handed a policy S3 is about to stop honouring.
+export const CREDENTIAL_MARGIN_SEC = 300;
+// Comment objects are never rewritten -- approval copies to a new key -- so the
+// CDN and browsers may keep them forever.
+export const COMMENT_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
 const SITE_RE = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/;
 
@@ -87,7 +93,9 @@ export function signCommenterToken({ kind, siteId, email, name, secret, ttlSec, 
   if (!SITE_RE.test(siteId ?? "")) throw new Error(`not a site id: ${siteId}`);
   const addr = String(email ?? "").trim().toLowerCase();
   if (!addr.includes("@")) throw new Error("a commenter token needs an email address");
-  const display = String(name ?? "").trim().slice(0, COMMENT_LIMITS.authorChars) || addr.split("@")[0];
+  // Never derived from the address: the sign-in page promises the email is not
+  // shown, and the part before the @ is often most of it.
+  const display = String(name ?? "").trim().slice(0, COMMENT_LIMITS.authorChars) || "Reader";
   const body = `${kind}.${siteId}.${Math.floor(now / 1000) + ttlSec}.${b64u(JSON.stringify({ e: addr, n: display }))}`;
   return `${body}.${hmacHex(secretOrThrow(secret), body)}`;
 }
@@ -129,6 +137,7 @@ const amzDate = (ms) => new Date(ms).toISOString().replace(/[-:]/g, "").replace(
  *   key            starts with <sitePrefix>/_comments/ (or _pending/)
  *   size           1 .. COMMENT_LIMITS.objectBytes
  *   Content-Type   exactly application/json
+ *   Cache-Control  exactly COMMENT_CACHE_CONTROL
  *   x-amz-meta-uid / x-amz-meta-name   exactly this person
  *
  * S3 also refuses a form carrying any field the policy does not name, so a
@@ -141,14 +150,20 @@ export function signCommentTicket({
   if (!/^[a-z]{2}-[a-z]+-\d$/.test(region ?? "")) throw new Error(`not a region: ${region}`);
   if (!/^sites\/[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(sitePrefix ?? "")) throw new Error(`not a site prefix: ${sitePrefix}`);
   if (!/^[a-z0-9]{8,32}$/.test(uid ?? "")) throw new Error(`not a commenter uid: ${uid}`);
-  const { accessKeyId, secretAccessKey, sessionToken } = credentials ?? {};
+  const { accessKeyId, secretAccessKey, sessionToken, expiration } = credentials ?? {};
   if (!accessKeyId || !secretAccessKey) throw new Error("no AWS credentials to sign a comment ticket with");
+  if (expiration) {
+    const left = Math.floor((new Date(expiration).getTime() - now) / 1000) - CREDENTIAL_MARGIN_SEC;
+    if (!(left > 0)) throw new Error("the credentials to sign a comment ticket with are about to expire");
+    ttlSec = Math.min(ttlSec, left);
+  }
 
   const prefix = `${sitePrefix}/${pending ? "_pending" : "_comments"}/`;
   const date = amzDate(now);
   const scope = `${date.slice(0, 8)}/${region}/s3/aws4_request`;
   const fields = {
     "Content-Type": "application/json",
+    "Cache-Control": COMMENT_CACHE_CONTROL,
     "x-amz-meta-uid": uid,
     "x-amz-meta-name": encodeURIComponent(String(name ?? "")),
     "X-Amz-Algorithm": "AWS4-HMAC-SHA256",

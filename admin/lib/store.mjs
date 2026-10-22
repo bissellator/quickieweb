@@ -172,6 +172,30 @@ export function storeFor(site) {
     return clean(targetKey);
   }
 
+  /** An object's text and its user metadata (x-amz-meta-*, keys without the prefix), or null. */
+  async function getWithMeta(key, bucket = STAGING) {
+    try {
+      const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: k(key) }));
+      return { text: (await streamToBuffer(res.Body)).toString("utf8"), meta: res.Metadata ?? {}, modified: res.LastModified };
+    } catch (err) {
+      if (err.name === "NoSuchKey" || err.$metadata?.httpStatusCode === 404) return null;
+      throw err;
+    }
+  }
+
+  // Keeps the source's metadata and content type, which is the point: a comment
+  // moved from _pending/ to _comments/ must still carry the author S3 pinned on
+  // upload, because that is what readers check it against.
+  async function copyKeepingMeta(sourceKey, targetKey, bucket = STAGING) {
+    await s3.send(new CopyObjectCommand({
+      Bucket: bucket,
+      Key: k(targetKey),
+      CopySource: `${bucket}/${encodeURIComponent(k(sourceKey)).replace(/%2F/g, "/")}`,
+      MetadataDirective: "COPY",
+    }));
+    return clean(targetKey);
+  }
+
   async function copyFromPlatform(sourceKey, targetKey) {
     if (!PLATFORM_BUCKET) throw new Error("PLATFORM_BUCKET is not set");
     await s3.send(new CopyObjectCommand({
@@ -299,7 +323,7 @@ export function storeFor(site) {
     s3,
     STAGING, LIVE, DISTRIBUTION_ID, LOG_BUCKET,
     key: k,
-    getBuffer, getText, getJson, putBuffer, putText, putJson,
-    remove, exists, list, copyFromPlatform, copyWithinStaging, computeChangeset, publish,
+    getBuffer, getText, getJson, getWithMeta, putBuffer, putText, putJson,
+    remove, exists, list, copyFromPlatform, copyWithinStaging, copyKeepingMeta, computeChangeset, publish,
   };
 }

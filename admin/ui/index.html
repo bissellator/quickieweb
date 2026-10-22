@@ -29,6 +29,7 @@
     <button data-needs-site class="tab" data-view="stats">Stats</button>
     <button data-needs-site class="tab" data-view="admins">People</button>
     <button data-needs-site class="tab" data-view="security">Security</button>
+    <button data-needs-site class="tab" data-view="comments">Comments</button>
     <button data-needs-site class="tab" data-view="publish">Publish</button>
     <button class="tab" data-view="ai">Build with AI</button>
   </nav>
@@ -264,6 +265,36 @@
     <p class="muted small" id="securityStatus"></p>
     <p class="err" id="securityErr" hidden></p>
     <pre class="log" id="securityLog" hidden></pre>
+  </section>
+
+  <!-- comments: who may comment, whether it waits for approval, and the queue.
+       Pages only show comments if they include the comments library, so these
+       settings change nothing on a site that does not. -->
+  <section class="view" id="commentsView" hidden>
+    <div class="viewhead">
+      <h1>Comments</h1>
+    </div>
+    <p class="muted">Who can comment on pages that include the comments library
+      (<code>/__qw/lib/comments.js</code>). Commenters sign in; their name is shown, their
+      email address never is.</p>
+    <fieldset class="levels" id="commentWho">
+      <label class="level"><input type="radio" name="commentWho" value="signed-in">
+        <span><strong>Anyone signed in</strong> Anyone with a Google or Microsoft account.</span></label>
+      <label class="level"><input type="radio" name="commentWho" value="members">
+        <span><strong>Members</strong> Only people on this site's People list.</span></label>
+      <label class="level"><input type="radio" name="commentWho" value="off">
+        <span><strong>Off</strong> Nobody can comment. Comments already published stay up.</span></label>
+    </fieldset>
+    <label class="level approval"><input type="checkbox" id="commentApproval">
+      <span><strong>Requires approval</strong> New comments wait here until an owner or admin
+        approves them. Nobody, including the author, sees them before that.</span></label>
+    <button class="btn primary" id="saveComments" disabled>Save</button>
+    <p class="muted small" id="commentsStatus"></p>
+    <p class="err" id="commentsErr" hidden></p>
+
+    <h2 class="pendinghead">Waiting for approval</h2>
+    <p class="muted small" id="pendingEmpty">Nothing is waiting.</p>
+    <ul class="pending" id="pendingList"></ul>
   </section>
 
   <!-- design: template choice + the customization form, both generated from

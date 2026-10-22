@@ -132,7 +132,49 @@ async function handler(event) {
     if (!admits(need, held)) return denied(siteId, asked, need);
   }
 
+  if (asked.substring(0, 15) === '/__qw/comments/') return comments(siteId, asked, request);
+
   request.uri = '/' + PREFIX + siteId + uri;
+  return request;
+}
+
+// ----------------------------------------------------------------- comments
+//
+// Read-only, and after the access check, so a protected site's comments are
+// exactly as readable as the site. The prefix is built HERE from the tenant and
+// a checked thread; nothing the viewer sends reaches S3 except the two paging
+// parameters. Writes never come this way -- they go straight to S3 under a
+// signed POST policy (shared/comment-ticket.mjs).
+//
+//   /__qw/comments/<thread>/          ListObjectsV2 of sites/<id>/_comments/<thread>/
+//   /__qw/comments/<thread>/<name>    that one object
+//
+// Served by the /__qw/comments/* behavior (infra/wire-comments.mjs), which
+// forwards the query string this builds and sets nosniff and a sandbox CSP.
+var THREAD_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)*$/;
+var NAME_RE = /^\d{8}T\d{9}Z-[a-z0-9]{8,32}-[a-z0-9]+(?:-[a-z0-9]+)*\.json$/;
+
+function comments(siteId, asked, request) {
+  var rest = asked.substring(15);
+  var cut = rest.lastIndexOf('/');
+  var thread = rest.substring(0, cut);
+  var name = rest.substring(cut + 1);
+  if (cut < 1 || thread.length > 120 || !THREAD_RE.test(thread)) return notFound();
+  var base = PREFIX + siteId + '/_comments/' + thread + '/';
+  if (name === '') {
+    var q = request.querystring || {};
+    var out = { 'list-type': { value: '2' }, 'prefix': { value: base } };
+    var p = ['start-after', 'continuation-token'];
+    for (var i = 0; i < p.length; i++) {
+      if (q[p[i]] && q[p[i]].value && q[p[i]].value.length <= 1024) out[p[i]] = { value: q[p[i]].value };
+    }
+    request.uri = '/';
+    request.querystring = out;
+    return request;
+  }
+  if (!NAME_RE.test(name)) return notFound();
+  request.uri = '/' + base + name;
+  request.querystring = {};
   return request;
 }
 

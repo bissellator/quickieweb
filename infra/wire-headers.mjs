@@ -165,8 +165,14 @@ const etag = dist.ETag;
 
 const behaviors = [cfg.DefaultCacheBehavior, ...(cfg.CacheBehaviors?.Items ?? [])];
 let changed = false;
+// Behaviors that carry a stricter policy of their own, set by the script named.
+const OWNED = { "/__qw/comments/*": "infra/wire-comments.mjs" };
 for (const b of behaviors) {
   const name = b.PathPattern ?? "(default)";
+  if (OWNED[name]) {
+    log(`${name}: has its own headers policy (${OWNED[name]}), left alone`);
+    continue;
+  }
   if (b.ResponseHeadersPolicyId === policyId) {
     log(`${name}: already attached`);
     continue;

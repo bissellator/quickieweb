@@ -14,6 +14,7 @@ import { createHash, createHmac } from "node:crypto";
 import {
   commenterUid, commentDecision, signCommentGrant, signCommentSession, verifyCommenterToken,
   signCommentTicket, signingKey, COMMENT_GRANT_SEC, COMMENT_SESSION_SEC, TICKET_SEC,
+  CREDENTIAL_MARGIN_SEC, COMMENT_CACHE_CONTROL,
 } from "../shared/comment-ticket.mjs";
 import { COMMENT_LIMITS, ticketProblem } from "../shared/comments.mjs";
 import { normalizeSite, normalizeSiteComments } from "../shared/site.mjs";
@@ -61,8 +62,8 @@ const verify = (token, extra = {}) => verifyCommenterToken(token,
 
 test("a session round-trips who the commenter is", () => {
   assert.deepEqual(verify(signCommentSession(opts())), { email: "sam@example.com", name: "Sam O" });
-  assert.deepEqual(verify(signCommentSession(opts({ name: "" }))), { email: "sam@example.com", name: "sam" },
-    "no name falls back to the mailbox, never to the full address");
+  assert.deepEqual(verify(signCommentSession(opts({ name: "" }))), { email: "sam@example.com", name: "Reader" },
+    "no name falls back to a neutral one, never to any part of the address");
 });
 
 test("a grant is not a session, and neither works on another site", () => {
@@ -113,6 +114,7 @@ test("the policy pins prefix, size, type and author -- every field it carries", 
   const { Policy, "X-Amz-Signature": sig, ...rest } = t.fields;
   assert.deepEqual(pinned, rest);
   assert.equal(pinned["Content-Type"], "application/json");
+  assert.equal(pinned["Cache-Control"], COMMENT_CACHE_CONTROL);
   assert.equal(pinned["x-amz-meta-uid"], "0123456789abcdef");
   assert.equal(pinned["x-amz-meta-name"], "Ren%C3%A9e%20O", "metadata travels as a header, so it is ASCII");
   assert.equal(pinned["X-Amz-Credential"], "AKIDEXAMPLE/20261022/us-west-2/s3/aws4_request");
@@ -125,6 +127,16 @@ test("the signature is SigV4 over the base64 policy", () => {
   const want = createHmac("sha256", signingKey(creds.secretAccessKey, "20261022", "us-west-2", "s3"))
     .update(t.fields.Policy).digest("hex");
   assert.equal(t.fields["X-Amz-Signature"], want);
+});
+
+test("a ticket never outlives the credentials that signed it", () => {
+  const expiration = new Date(NOW + 20 * 60e3);
+  const t = ticket({ credentials: { ...creds, expiration } });
+  assert.equal(t.expires, new Date(NOW + (20 * 60 - CREDENTIAL_MARGIN_SEC) * 1000).toISOString());
+  assert.equal(policyOf(t).expiration, t.expires);
+  assert.equal(ticket({ credentials: { ...creds, expiration: new Date(NOW + 10 * 3600e3) } }).expires,
+    new Date(NOW + TICKET_SEC * 1000).toISOString(), "long-lived credentials still get the normal hour");
+  assert.throws(() => ticket({ credentials: { ...creds, expiration: new Date(NOW + 60e3) } }), /about to expire/);
 });
 
 test("a site that requires approval gets tickets for _pending/ only", () => {

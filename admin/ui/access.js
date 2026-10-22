@@ -12,6 +12,10 @@
 // switch=1 comes from the edge's "not available" page: the person is signed in
 // as someone who cannot read that page, so the remembered session is dropped and
 // the account chooser is shown again.
+//
+// for=comment is the comments library asking (shared/comments.mjs, signIn()):
+// the same sign-in, but the grant is POST /api/comments/grant, and what it
+// becomes is a commenter session on the site's host rather than a reading level.
 
 import * as auth from "./auth.js";
 import * as ms from "./ms-signin.js";
@@ -24,6 +28,7 @@ const params = new URLSearchParams(location.search);
 const SITE = (params.get("site") ?? "").toLowerCase();
 const NEXT = params.get("next") ?? "/";
 const SWITCH = params.get("switch") === "1";
+const FOR_COMMENT = params.get("for") === "comment";
 
 const only = (id) => {
   for (const s of ["signinStep", "workingStep", "deniedStep", "failStep"]) show($(s), s === id);
@@ -38,7 +43,7 @@ async function requestGrant(session) {
   only("workingStep");
   $("workingWho").textContent = `Signed in as ${session.email}`;
   try {
-    const res = await auth.api("/access/grant", {
+    const res = await auth.api(FOR_COMMENT ? "/comments/grant" : "/access/grant", {
       method: "POST",
       body: JSON.stringify({ site: SITE, next: NEXT }),
     });
@@ -67,7 +72,17 @@ async function boot() {
   if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(SITE)) {
     return fail("This page is opened by a protected site when it needs you to sign in. There is nothing to do here on its own.");
   }
-  $("signinTitle").textContent = `Sign in to read ${SITE}`;
+  if (FOR_COMMENT) {
+    document.title = "Sign in to comment - Quickieweb";
+    $("signinTitle").textContent = `Sign in to comment on ${SITE}`;
+    $("signinWho").textContent = "Your name is shown with what you write. Your email address is not.";
+    $("workingTitle").textContent = "Back to the page...";
+    $("deniedTitle").textContent = "You can't comment here";
+    $("foot").textContent = "Signing in proves who you are. The site sees your name and an id that " +
+      "is the same each time you comment, never your email address.";
+  } else {
+    $("signinTitle").textContent = `Sign in to read ${SITE}`;
+  }
   const cfg = await (await fetch("config.json")).json();
   if (!cfg.googleClientId) return fail("This installation has no sign-in configured.");
   if (SWITCH) auth.signOut();

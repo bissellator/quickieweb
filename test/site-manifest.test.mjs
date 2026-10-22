@@ -257,6 +257,7 @@ test("a mirror may read its own site's prefix and nothing else", async () => {
   const { withMirrors } = await import("../infra/lib/mirror-policy.mjs");
   const tpl = JSON.parse((await readFile(path.join(ROOT, "infra", "iam", "tenant-live-bucket-policy.json"), "utf8"))
     .replaceAll("__BUCKET__", "live").replaceAll("__ACCOUNT__", "111").replaceAll("__DISTRIBUTION__", "SHARED1234"));
+  const before = tpl.Statement.length;
   const doc = withMirrors(tpl, { bucket: "live", account: "111", mirrors: [{ distributionId: "MIRROR1234", prefix: "sites/acme/" }] });
   const allow = doc.Statement.find((s) => s.Sid === "MirrorReadMIRROR1234");
   assert.equal(allow.Resource, "arn:aws:s3:::live/sites/acme/*");
@@ -266,7 +267,7 @@ test("a mirror may read its own site's prefix and nothing else", async () => {
     "arn:aws:cloudfront::111:distribution/SHARED1234", "arn:aws:cloudfront::111:distribution/MIRROR1234"]);
   // The shared grant is untouched, and the template document itself is not mutated.
   assert.equal(doc.Statement.find((s) => s.Sid === "ReadOnlyFromOurDistribution").Resource, "arn:aws:s3:::live/*");
-  assert.equal(tpl.Statement.length, 3);
+  assert.equal(tpl.Statement.length, before);
   // A prefix that would open the whole bucket is refused.
   for (const prefix of ["", "sites/", "/", "sites/acme", "../", "sites/a/b/"]) {
     assert.throws(() => withMirrors(tpl, { bucket: "live", account: "111", mirrors: [{ distributionId: "MIRROR1234", prefix }] }), /prefix/, prefix);
