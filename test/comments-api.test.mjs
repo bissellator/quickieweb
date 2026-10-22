@@ -12,7 +12,7 @@ import { readFile } from "node:fs/promises";
 
 import {
   readCookie, commenterFrom, grantRedirect, sessionCookies, CLEAR_SESSION_COOKIES, ticketFor, settingsFrom,
-  listPending, approve, reject, PENDING_PREFIX, COMMENTS_PREFIX,
+  listPending, approve, reject, removeComment, PENDING_PREFIX, COMMENTS_PREFIX,
 } from "../admin/lib/comments.mjs";
 import { buildEntryName, checkEntry, checkObject, ticketProblem, COMMENT_LIMITS } from "../shared/comments.mjs";
 import { commenterUid } from "../shared/comment-ticket.mjs";
@@ -48,7 +48,7 @@ test("sign-in lands on the site's own host, and comes back to the page", () => {
   assert.match(setCookie, /^qw_commenter=cs1\.acme\./);
   assert.match(setCookie, /; Secure; HttpOnly; SameSite=Lax; Path=\/api\/comments; Max-Age=43200$/);
   // The hint is readable by the page (no HttpOnly), site-wide, and holds the name only.
-  assert.equal(hint, `qw_cmt=${encodeURIComponent(actor.name)}; Secure; SameSite=Lax; Path=/; Max-Age=43200`);
+  assert.equal(hint, `qw_cmt=none:${encodeURIComponent(actor.name)}; Secure; SameSite=Lax; Path=/; Max-Age=43200`);
   assert.ok(!hint.includes(actor.email) && !hint.includes(encodeURIComponent(actor.email)));
   assert.match(CLEAR_SESSION_COOKIES[0], /^qw_commenter=; .*Max-Age=0$/);
   assert.match(CLEAR_SESSION_COOKIES[1], /^qw_cmt=; .*Path=\/; Max-Age=0$/);
@@ -146,7 +146,7 @@ function bucket() {
       assert.ok(text.length >= 1 && text.length <= COMMENT_LIMITS.objectBytes);
       objects.set(key.replace(/^sites\/acme\//, ""), {
         text, modified: clock,
-        meta: { uid: ticket.fields["x-amz-meta-uid"], name: ticket.fields["x-amz-meta-name"] },
+        meta: { uid: ticket.fields["x-amz-meta-uid"], name: ticket.fields["x-amz-meta-name"], role: ticket.fields["x-amz-meta-role"] },
       });
     },
   };
@@ -165,7 +165,7 @@ test("the queue shows checked comments, and junk as junk", async () => {
   const pending = await listPending(b.ops);
   assert.equal(pending.length, 3);
   const ok = pending.find((p) => p.name === good);
-  assert.deepEqual(ok.author, { uid: t.uid, name: "Sam O" });
+  assert.deepEqual(ok.author, { uid: t.uid, name: "Sam O", role: "none" });
   assert.equal(ok.comment.body, "Hello");
   assert.deepEqual(pending.filter((p) => p.problem).map((p) => p.problem).sort(), ["not JSON", "not a comment key"]);
 });
@@ -206,8 +206,48 @@ test("a moderated comment, start to finish, is accepted by a reader after approv
   const stored = b.objects.get(key);
   const entry = checkEntry({ key: `sites/acme/${key}`, modified: stored.modified, size: stored.text.length }, "my-article").entry;
   assert.ok(entry, "the reader accepts the approved key");
-  const header = (h) => ({ "x-amz-meta-uid": stored.meta.uid, "x-amz-meta-name": stored.meta.name })[h] ?? null;
+  const header = (h) => (h.startsWith("x-amz-meta-") ? stored.meta[h.slice(11)] ?? null : null);
   const item = checkObject(entry, stored.text, header, "my-article").item;
-  assert.deepEqual(item.author, { uid: t.uid, name: "Sam O" }, "the author S3 pinned on upload survives approval");
+  assert.deepEqual(item.author, { uid: t.uid, name: "Sam O", role: "none" }, "the author S3 pinned on upload survives approval");
   assert.equal(item.comment.subject, "Great post");
+});
+
+test("the hint carries the role at sign-in, for drawing buttons", () => {
+  const members = [{ email: "sam@example.com", role: "editor" }, { email: "owner@acme.test", role: "owner" }];
+  const s = site({}, members);
+  const url = new URL(grantRedirect({ site: s, actor, next: "/a.html", secret: SECRET, gateOrigin: "https://acme.quickieweb.com", now: NOW }));
+  const [, hint] = sessionCookies({ siteId: "acme", grant: url.searchParams.get("g"), secret: SECRET, site: s, now: NOW });
+  assert.match(hint, /^qw_cmt=editor:Sam%20O;/);
+});
+
+test("a member's ticket pins their role and skips the approval queue", () => {
+  const s = site({ approval: true }, [{ email: "sam@example.com", role: "editor" }]);
+  const t = ticketFor({ site: s, commenter: { email: "sam@example.com", name: "Sam" }, secret: SECRET, credentials: creds, now: NOW });
+  assert.equal(t.role, "editor");
+  assert.equal(t.fields["x-amz-meta-role"], "editor");
+  assert.equal(t.pending, false);
+  assert.ok(t.prefix.endsWith("/_comments/"));
+});
+
+test("deleting a comment takes its events with it, and nothing else", async () => {
+  const b = bucket();
+  const t = ticketFor({ site: site(), commenter: { email: "sam@example.com", name: "Sam" }, secret: SECRET, credentials: creds, now: NOW });
+  const at = (ms, slug) => `${t.prefix}my-article/${buildEntryName(ms, t.uid, slug)}`;
+  const a = buildEntryName(NOW, t.uid, "hello");
+  const other = buildEntryName(NOW + 1, t.uid, "other");
+  b.upload(t, `${t.prefix}my-article/${a}`, body());
+  b.upload(t, `${t.prefix}my-article/${other}`, body());
+  b.upload(t, at(NOW + 2, "resolve"), JSON.stringify({ v: 1, kind: "resolve", thread: "my-article", ref: a }));
+  b.upload(t, at(NOW + 3, "resolve"), JSON.stringify({ v: 1, kind: "resolve", thread: "my-article", ref: other }));
+  b.upload(t, at(NOW + 4, "reopen"), "not json");
+
+  const done = await removeComment(b.ops, { thread: "my-article", name: a });
+  assert.deepEqual(done, { key: `${COMMENTS_PREFIX}my-article/${a}`, events: 1 });
+  assert.deepEqual([...b.objects.keys()].map((k) => k.split("-").pop()).sort(), ["other.json", "reopen.json", "resolve.json"]);
+
+  await assert.rejects(removeComment(b.ops, { thread: "my-article", name: a }), (e) => e.status === 404);
+  await assert.rejects(removeComment(b.ops, { thread: "../x", name: a }), (e) => e.status === 400);
+  await assert.rejects(removeComment(b.ops, { thread: "my-article", name: "index.html" }), (e) => e.status === 400);
+  const ev = [...b.objects.keys()].find((k) => k.endsWith("resolve.json")).split("/").pop();
+  await assert.rejects(removeComment(b.ops, { thread: "my-article", name: ev }), /only comments can be deleted/);
 });

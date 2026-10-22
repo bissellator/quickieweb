@@ -25,7 +25,7 @@ import {
   commentDecision, commenterUid, signCommentGrant, signCommentSession, verifyCommenterToken,
   signCommentTicket, COMMENTER_COOKIE, COMMENT_GRANT_SEC, COMMENT_SESSION_SEC,
 } from "../../shared/comment-ticket.mjs";
-import { COMMENT_WHO } from "../../shared/site.mjs";
+import { COMMENT_WHO, roleInSite } from "../../shared/site.mjs";
 
 export const PENDING_PREFIX = "_pending/";
 export const COMMENTS_PREFIX = "_comments/";
@@ -79,11 +79,15 @@ export function grantRedirect({ site, actor, next, secret, gateOrigin, now = Dat
  * if the grant is no good. Both share a lifetime, so the hint never outlives
  * the session by more than a sign-out on another tab.
  */
-export function sessionCookies({ siteId, grant, secret, now = Date.now() }) {
+export function sessionCookies({ siteId, grant, secret, site = null, now = Date.now() }) {
   const who = verifyCommenterToken(grant, { kind: "cg1", siteId, maxSec: COMMENT_GRANT_SEC, secret, now });
   if (!who) throw new CommentError("That sign-in link has expired or is not for this site. Sign in again.", 403);
   const token = signCommentSession({ siteId, email: who.email, name: who.name, secret, now });
-  const shown = encodeURIComponent(String(who.name || "Reader").slice(0, 80));
+  // "<role>:<name>". The role is a hint for which buttons to draw and nothing
+  // more: readers trust the role S3 stored with each event, and deleting asks
+  // the Lambda, which looks the role up again.
+  const role = (site && roleInSite(who.email, site)) || "none";
+  const shown = `${role}:${encodeURIComponent(String(who.name || "Reader").slice(0, 80))}`;
   return [
     `${COMMENTER_COOKIE}=${token}; ${COOKIE_ATTRS}; Max-Age=${COMMENT_SESSION_SEC}`,
     `${COMMENTER_HINT_COOKIE}=${shown}; ${HINT_ATTRS}; Max-Age=${COMMENT_SESSION_SEC}`,
@@ -112,6 +116,7 @@ export function ticketFor({ site, commenter, secret, credentials, now = Date.now
     pending: d.pending,
     uid: commenterUid(commenter.email, secret),
     name: commenter.name,
+    role: d.role,
     credentials,
     now,
   });
@@ -154,7 +159,7 @@ async function inspect(ops, key, modified) {
     return { ...base, problem: "its time does not match when it was stored" };
   }
   const entry = { key, name: where.name, uid: where.parsed.uid, modified };
-  const header = (h) => (h === "x-amz-meta-uid" ? got.meta.uid ?? null : h === "x-amz-meta-name" ? got.meta.name ?? null : null);
+  const header = (h) => (h.startsWith("x-amz-meta-") ? got.meta[h.slice(11)] ?? null : null);
   const checked = checkObject(entry, got.text, header, where.thread);
   return checked.item
     ? { ...base, author: checked.item.author, comment: checked.item.comment }
@@ -190,6 +195,37 @@ export async function approve(ops, key, now = Date.now()) {
   await ops.copy(key, target);
   await ops.remove(key);
   return { key: target, thread: where.thread };
+}
+
+/**
+ * Take a published comment down, with the events that refer to it so they do
+ * not linger as "refers to a comment that is not before it". Owners, admins
+ * and editors only -- the caller checks the role; this checks the key.
+ */
+export async function removeComment(ops, { thread, name }) {
+  const parsed = typeof name === "string" ? parseEntryName(name) : null;
+  if (!validThread(thread) || !parsed) throw new CommentError("Not a comment.", 400);
+  const key = `${COMMENTS_PREFIX}${thread}/${name}`;
+  const got = await ops.read(key);
+  if (got === null) throw new CommentError("That comment is already gone.", 404);
+  let kind;
+  try { kind = JSON.parse(got.text).kind; } catch { kind = null; }
+  if (kind !== "comment") throw new CommentError("That is not a comment; only comments can be deleted.", 400);
+  const events = [];
+  for (const o of await ops.list(`${COMMENTS_PREFIX}${thread}/`)) {
+    const p = parseEntryName(o.key.slice(o.key.lastIndexOf("/") + 1));
+    // Events are named for their kind (comments.mjs event()), so only those
+    // need reading. A slug is display sugar, so the ref inside is what decides.
+    if (!p || !["resolve", "reopen", "retract"].includes(p.slug)) continue;
+    const ev = await ops.read(o.key);
+    if (ev === null) continue;
+    let ref;
+    try { ref = JSON.parse(ev.text).ref; } catch { ref = null; }
+    if (ref === name) events.push(o.key);
+  }
+  await ops.remove(key);
+  for (const k of events) await ops.remove(k);
+  return { key, events: events.length };
 }
 
 export async function reject(ops, key) {

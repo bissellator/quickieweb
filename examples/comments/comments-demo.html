@@ -120,7 +120,8 @@
         b.addEventListener("click", function () { run(b, fn); });
         actions.append(b);
       };
-      act(cm.resolved ? "Reopen" : "Resolve", function () { return cm.resolved ? c.reopen(cm.name) : c.resolve(cm.name); });
+      // Readers ignore a resolve from someone without a role on the site, so only offer it to them.
+      if (c.role() !== "none") act(cm.resolved ? "Reopen" : "Resolve", function () { return cm.resolved ? c.reopen(cm.name) : c.resolve(cm.name); });
       if (mine && mine === cm.author.uid) act("Retract", function () { return c.retract(cm.name); });
       card.append(actions);
       list.append(card);

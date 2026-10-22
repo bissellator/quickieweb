@@ -36,12 +36,14 @@ test("comments default to anyone signed in, unmoderated", () => {
 });
 
 test("who may comment, and whether it waits for approval", () => {
-  assert.deepEqual(commentDecision(site({ who: "signed-in" }), "anyone@x.test"), { allowed: true, pending: false });
-  assert.deepEqual(commentDecision(site({ who: "signed-in", approval: true }), "anyone@x.test"), { allowed: true, pending: true });
+  assert.deepEqual(commentDecision(site({ who: "signed-in" }), "anyone@x.test"), { allowed: true, pending: false, role: "none" });
+  assert.deepEqual(commentDecision(site({ who: "signed-in", approval: true }), "anyone@x.test"), { allowed: true, pending: true, role: "none" });
+  assert.deepEqual(commentDecision(site({ who: "signed-in", approval: true }), "owner@acme.test"),
+    { allowed: true, pending: false, role: "owner" }, "a member is not moderated");
   assert.equal(commentDecision(site({ who: "signed-in" }), null).status, 401);
   assert.equal(commentDecision(site({ who: "off" }), "owner@acme.test").status, 403, "off is off, even for the owner");
   assert.equal(commentDecision(site({ who: "members" }), "stranger@x.test").status, 403);
-  assert.deepEqual(commentDecision(site({ who: "members" }), "OWNER@acme.test"), { allowed: true, pending: false });
+  assert.deepEqual(commentDecision(site({ who: "members" }), "OWNER@acme.test"), { allowed: true, pending: false, role: "owner" });
 });
 
 // ------------------------------------------------------------------- uid
@@ -117,6 +119,9 @@ test("the policy pins prefix, size, type and author -- every field it carries", 
   assert.equal(pinned["Cache-Control"], COMMENT_CACHE_CONTROL);
   assert.equal(pinned["x-amz-meta-uid"], "0123456789abcdef");
   assert.equal(pinned["x-amz-meta-name"], "Ren%C3%A9e%20O", "metadata travels as a header, so it is ASCII");
+  assert.equal(pinned["x-amz-meta-role"], "none", "pinned even when there is no role, so one cannot be added");
+  assert.equal(policyOf(ticket({ role: "editor" })).conditions.find((c) => "x-amz-meta-role" in c)["x-amz-meta-role"], "editor");
+  assert.throws(() => ticket({ role: "staff" }), /not a commenter role/);
   assert.equal(pinned["X-Amz-Credential"], "AKIDEXAMPLE/20261022/us-west-2/s3/aws4_request");
   assert.equal(pinned["X-Amz-Date"], "20261022T153012Z");
   assert.equal(pinned["X-Amz-Security-Token"], "tok/en+=");

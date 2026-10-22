@@ -55,8 +55,18 @@
 //
 // Nothing is ever overwritten or deleted by a reader. Resolving, reopening and
 // retracting are new objects that refer to a comment; foldThread() applies them
-// in time order. Anyone signed in may resolve or reopen; only the author may
-// retract. Author and time are never taken from the body.
+// in time order. Author, role and time are never taken from the body.
+//
+// WHO MAY DO WHAT
+//
+//   comment          whoever the site's Comments setting allows
+//   resolve, reopen  someone with a role on the site (owner, admin, editor,
+//                    viewer). The ticket pins x-amz-meta-role, so a reader
+//                    knows who held a role without asking anyone.
+//   retract          the comment's author
+//   delete           owners, admins and editors -- through the Lambda
+//                    (DELETE /api/comments/entry), because removing an object
+//                    is moderation, and moderation is the CMS's job
 
 const LIMITS = Object.freeze({
   bodyChars: 2000,
@@ -77,6 +87,9 @@ const LIMITS = Object.freeze({
 
 export const COMMENT_LIMITS = LIMITS;
 export const COMMENT_KINDS = Object.freeze(["comment", "resolve", "reopen", "retract"]);
+// Mirrored in shared/site.mjs (SITE_ROLES, canEdit); kept literal inside the
+// shipped functions because they cannot import.
+export const ROLE_HOLDERS = Object.freeze(["owner", "admin", "editor", "viewer"]);
 export const COMMENTS_PATH = "/__qw/comments/";
 export const TICKET_PATH = "/api/comments/ticket";
 
@@ -276,18 +289,34 @@ function checkObject(entry, text, header, thread) {
   try { name = decodeURIComponent(raw === null ? "" : raw); } catch (e) { return { reason: "author name is not readable" }; }
   var p = textProblem("author name", name, LIMITS.authorChars, true, false);
   if (p) return { reason: p };
+  // Absent on anything stored before roles were pinned: those authors held no
+  // role as far as any reader can prove, which is the safe reading.
+  var role = header("x-amz-meta-role");
+  if (role === null) role = "none";
+  if (!isRole(role) && role !== "none") return { reason: "author role is not one this site has" };
   return {
     item: {
       key: entry.key, name: entry.name, modified: entry.modified,
-      author: { uid: entry.uid, name: name }, comment: obj,
+      author: { uid: entry.uid, name: name, role: role }, comment: obj,
     },
   };
 }
 
+/** A role on the site, as opposed to "none". */
+function isRole(r) {
+  return r === "owner" || r === "admin" || r === "editor" || r === "viewer";
+}
+
+/** May delete comments: the same line as canEdit in shared/site.mjs. */
+function canModerate(r) {
+  return r === "owner" || r === "admin" || r === "editor";
+}
+
 /**
  * Checked items -> the thread as a reader sees it, oldest first. Events apply
- * in stored order; one that refers to an unknown comment, or a retraction by
- * anyone but the author, is reported rather than applied.
+ * in stored order; one that refers to an unknown comment, a resolve or reopen
+ * by someone without a role on the site, or a retraction by anyone but the
+ * author, is reported rather than applied.
  */
 function foldThread(items) {
   var sorted = items.slice().sort(function (a, b) {
@@ -312,6 +341,8 @@ function foldThread(items) {
     if (c.kind === "retract") {
       if (it.author.uid !== target.author.uid) rejected.push({ key: it.key, reason: "only the author can retract a comment" });
       else target.retracted = true;
+    } else if (!isRole(it.author.role)) {
+      rejected.push({ key: it.key, reason: "only someone with a role on this site can " + c.kind + " a comment" });
     } else if (c.kind === "resolve") {
       target.resolved = { by: it.author, at: it.modified };
     } else {
@@ -351,10 +382,25 @@ function ticketProblem(t) {
  * refused with code "signin", and the UI falls back to the button.
  */
 function hintName(cookies) {
+  var h = readHint(cookies);
+  return h ? h.name : null;
+}
+
+/**
+ * { name, role } from the hint ("<role>:<name>"), or null. The role decides
+ * which buttons to draw and nothing more: readers check the role S3 stored
+ * with each event, and the Lambda checks it again before a delete.
+ */
+function readHint(cookies) {
   var m = /(?:^|;\s*)qw_cmt=([^;]*)/.exec(String(cookies || ""));
   if (!m || !m[1]) return null;
+  var i = m[1].indexOf(":");
+  var role = i > 0 ? m[1].slice(0, i) : "none";
+  if (!isRole(role)) role = "none";
+  var name;
   // An undecodable hint is the same as no hint: there is nothing to show for it.
-  try { return decodeURIComponent(m[1]) || null; } catch (e) { return null; }
+  try { name = decodeURIComponent(i > 0 ? m[1].slice(i + 1) : m[1]); } catch (e) { return null; }
+  return name ? { name: name, role: role } : null;
 }
 
 /**
@@ -504,6 +550,22 @@ function createClient(env, opts) {
     signIn: function () { env.location.assign(signInUrl()); },
     /** Who the hint cookie says is signed in to comment here, or null. */
     commenter: function () { return hintName(env.cookie ? env.cookie() : ""); },
+    /** Their role on this site per the hint: "owner" ... "viewer", or "none". */
+    role: function () { var h = readHint(env.cookie ? env.cookie() : ""); return h ? h.role : "none"; },
+    /** Delete a comment (owners, admins, editors). Asks the Lambda; S3 is not writable from here. */
+    remove: async function (name) {
+      if (!parseEntryName(name)) throw commentError("invalid", "not a comment name: " + JSON.stringify(name));
+      var res = await env.fetch(origin + "/api/comments/entry?site=" + encodeURIComponent(site) +
+        "&thread=" + encodeURIComponent(thread) + "&name=" + encodeURIComponent(name),
+        { method: "DELETE", credentials: "same-origin" });
+      if (res.status === 401) throw commentError("signin", "Sign in to delete a comment.", { signInUrl: signInUrl() });
+      if (!res.ok) {
+        var why = "";
+        try { why = (await res.json()).error || ""; } catch (e) { why = "HTTP " + res.status; }
+        throw commentError("http", why || "deleting failed: HTTP " + res.status, { status: res.status });
+      }
+      return res.json();
+    },
     signOut: async function () {
       ticket = null;
       return (await ok(await env.fetch(origin + "/api/comments/session?site=" + encodeURIComponent(site),
@@ -547,6 +609,8 @@ function mountUi(root, client, doc, win) {
   };
   var DRAFT = "qw-comments-draft:" + client.site + ":" + client.thread;
   var MINE = "qw-comments-uid";
+  // Deleted here, but the edge may serve its cached list for a few seconds yet.
+  var gone = Object.create(null);
 
   root.classList.add("qw-comments");
   root.replaceChildren();
@@ -565,10 +629,11 @@ function mountUi(root, client, doc, win) {
 
   function render(thread) {
     list.replaceChildren();
-    if (!thread.comments.length) list.append(h("p", "qw-c-note", "No comments yet."));
-    var mine = store("localStorage", MINE);
-    var signedIn = Boolean(client.commenter());
-    thread.comments.forEach(function (c) {
+    var shown = thread.comments.filter(function (c) { return !gone[c.name]; });
+    if (!shown.length) list.append(h("p", "qw-c-note", "No comments yet."));
+    var mine = client.commenter() ? store("localStorage", MINE) : null;
+    var role = client.commenter() ? client.role() : "none";
+    shown.forEach(function (c) {
       var card = h("article", "qw-c-comment" + (c.resolved ? " qw-c-resolved" : ""));
       var when = new Date(c.at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
       var meta = h("p", "qw-c-meta");
@@ -577,17 +642,23 @@ function mountUi(root, client, doc, win) {
       card.append(meta);
       if (c.subject) card.append(h("p", "qw-c-subject", c.subject));
       card.append(h("p", "qw-c-body", c.body));
-      if (signedIn) {
-        var acts = h("div", "qw-c-actions");
-        var add = function (label, fn) {
-          var b = button("qw-c-link", label);
-          b.addEventListener("click", function () { act(b, fn); });
-          acts.append(b);
-        };
+      var acts = h("div", "qw-c-actions");
+      var add = function (label, fn) {
+        var b = button("qw-c-link", label);
+        b.addEventListener("click", function () { act(b, fn); });
+        acts.append(b);
+      };
+      if (isRole(role)) {
         add(c.resolved ? "Reopen" : "Resolve", function () { return c.resolved ? client.reopen(c.name) : client.resolve(c.name); });
-        if (mine && mine === c.author.uid) add("Retract", function () { return client.retract(c.name); });
-        card.append(acts);
       }
+      if (mine && mine === c.author.uid) add("Retract", function () { return client.retract(c.name); });
+      if (canModerate(role)) {
+        add("Delete", function () {
+          if (!win.confirm("Delete this comment for everyone? This cannot be undone.")) return Promise.resolve(null);
+          return client.remove(c.name).then(function (r) { gone[c.name] = true; return r; });
+        });
+      }
+      if (acts.childNodes.length) card.append(acts);
       list.append(card);
     });
   }
@@ -677,12 +748,13 @@ function mountUi(root, client, doc, win) {
 const PURE = [
   textProblem, validThread, validSite, threadFromPath, siteFromHost, slugify, stampOf, buildEntryName,
   parseEntryName, byteLength, lintComment, decodeXml, xmlTag, parseListXml, checkEntry, checkObject,
-  foldThread, commentError, ticketProblem, hintName, createClient, mountUi,
+  foldThread, commentError, ticketProblem, isRole, canModerate, hintName, readHint, createClient, mountUi,
 ];
 
 export {
   textProblem, validThread, validSite, threadFromPath, siteFromHost, slugify, stampOf, buildEntryName,
-  parseEntryName, lintComment, parseListXml, checkEntry, checkObject, foldThread, ticketProblem, hintName, createClient,
+  parseEntryName, lintComment, parseListXml, checkEntry, checkObject, foldThread, ticketProblem, isRole, canModerate,
+  hintName, readHint, createClient,
 };
 
 /**

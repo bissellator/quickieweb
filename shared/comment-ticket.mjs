@@ -76,14 +76,20 @@ export function commenterUid(email, secret) {
  * Whether this person may comment on this site right now, and where their
  * comments go. `email` is null for someone not signed in.
  */
+/** What x-amz-meta-role may hold: a site role, or "none" for everyone else. */
+export const COMMENTER_ROLES = Object.freeze(["owner", "admin", "editor", "viewer", "none"]);
+
 export function commentDecision(siteRecord, email) {
   const { who, approval } = siteRecord.comments;
   if (who === "off") return { allowed: false, status: 403, reason: "Comments are turned off on this site." };
   if (!email) return { allowed: false, status: 401, reason: "Sign in to comment." };
-  if (who === "members" && !roleInSite(email, siteRecord)) {
+  const role = roleInSite(email, siteRecord);
+  if (who === "members" && !role) {
     return { allowed: false, status: 403, reason: `Only members of this site can comment, and ${email} is not one.` };
   }
-  return { allowed: true, pending: approval };
+  // Someone with a role on the site is not moderated: approval exists for
+  // strangers, and a member's resolve waiting in a queue would be absurd.
+  return { allowed: true, pending: approval && !role, role: role ?? "none" };
 }
 
 // -------------------------------------------------------------- tokens
@@ -139,13 +145,17 @@ const amzDate = (ms) => new Date(ms).toISOString().replace(/[-:]/g, "").replace(
  *   Content-Type   exactly application/json
  *   Cache-Control  exactly COMMENT_CACHE_CONTROL
  *   x-amz-meta-uid / x-amz-meta-name   exactly this person
+ *   x-amz-meta-role                    their role on the site when the ticket
+ *                                      was issued, or "none" -- what readers
+ *                                      check before honouring a resolve
  *
  * S3 also refuses a form carrying any field the policy does not name, so a
  * caller cannot add metadata of their own.
  */
 export function signCommentTicket({
-  bucket, region, sitePrefix, pending, uid, name, credentials, now = Date.now(), ttlSec = TICKET_SEC,
+  bucket, region, sitePrefix, pending, uid, name, role = "none", credentials, now = Date.now(), ttlSec = TICKET_SEC,
 }) {
+  if (!COMMENTER_ROLES.includes(role)) throw new Error(`not a commenter role: ${role}`);
   if (!/^[a-z0-9.-]{3,63}$/.test(bucket ?? "")) throw new Error(`not a bucket name: ${bucket}`);
   if (!/^[a-z]{2}-[a-z]+-\d$/.test(region ?? "")) throw new Error(`not a region: ${region}`);
   if (!/^sites\/[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(sitePrefix ?? "")) throw new Error(`not a site prefix: ${sitePrefix}`);
@@ -166,6 +176,7 @@ export function signCommentTicket({
     "Cache-Control": COMMENT_CACHE_CONTROL,
     "x-amz-meta-uid": uid,
     "x-amz-meta-name": encodeURIComponent(String(name ?? "")),
+    "x-amz-meta-role": role,
     "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
     "X-Amz-Credential": `${accessKeyId}/${scope}`,
     "X-Amz-Date": date,
@@ -190,6 +201,7 @@ export function signCommentTicket({
     pending: Boolean(pending),
     uid,
     name: String(name ?? ""),
+    role,
     now: new Date(now).toISOString(),
     expires,
   };

@@ -13,7 +13,7 @@ import { normalizeContent } from "../shared/content.mjs";
 import { checkManifest, compileTemplate } from "../shared/template/manifest.mjs";
 import { COMMENTS_LIB } from "../shared/template/viewmodel.mjs";
 import { renderSite } from "../shared/render.mjs";
-import { hintName, validThread, DEFAULT_CSS } from "../shared/comments.mjs";
+import { hintName, readHint, validThread, DEFAULT_CSS } from "../shared/comments.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -67,6 +67,14 @@ test("the hint cookie gives a name, and nothing else", () => {
   assert.equal(hintName(""), null);
   assert.equal(hintName(undefined), null);
   assert.equal(hintName("qw_cmt=%E0%A4"), null, "undecodable is the same as absent");
+});
+
+test("the hint's role is a site role or none, and a name may hold a colon", () => {
+  assert.deepEqual(readHint("qw_cmt=editor:Sam%20O"), { name: "Sam O", role: "editor" });
+  assert.deepEqual(readHint("qw_cmt=Sam"), { name: "Sam", role: "none" }, "a hint from before roles");
+  assert.deepEqual(readHint("qw_cmt=staff:Sam"), { name: "Sam", role: "none" }, "not a site role");
+  assert.deepEqual(readHint("qw_cmt=owner:Dr%3A%20Who"), { name: "Dr: Who", role: "owner" });
+  assert.equal(readHint("qw_cmt=owner:"), null);
 });
 
 test("the default styles stay at zero specificity, so any template rule wins", () => {

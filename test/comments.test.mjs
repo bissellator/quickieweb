@@ -180,8 +180,10 @@ const headers = (h) => (n) => (n in h ? h[n] : null);
 test("a good object becomes an item with its signed author", () => {
   const e = entry(buildEntryName(T0, UID, "hi"));
   const r = checkObject(e, JSON.stringify(comment()), headers({ "x-amz-meta-uid": UID, "x-amz-meta-name": "Ren%C3%A9e%20O" }), "my-article");
-  assert.deepEqual(r.item.author, { uid: UID, name: "Renée O" });
+  assert.deepEqual(r.item.author, { uid: UID, name: "Renée O", role: "none" }, "no role header: no role");
   assert.equal(r.item.comment.body, "Nice post.");
+  const h = { "x-amz-meta-uid": UID, "x-amz-meta-name": "Sam", "x-amz-meta-role": "editor" };
+  assert.equal(checkObject(e, JSON.stringify(comment()), headers(h), "my-article").item.author.role, "editor");
 });
 
 test("hostile objects are reasons, never items", () => {
@@ -195,6 +197,7 @@ test("hostile objects are reasons, never items", () => {
     [JSON.stringify(comment()), { "x-amz-meta-uid": UID }, /author name is empty/],
     [JSON.stringify(comment()), { ...good, "x-amz-meta-name": "%E0%A4%A" }, /not readable/],
     [JSON.stringify(comment()), { ...good, "x-amz-meta-name": "a%0Ab" }, /author name must be one line/],
+    [JSON.stringify(comment()), { ...good, "x-amz-meta-role": "staff" }, /role is not one/],
   ];
   for (const [text, h, why] of cases) {
     const r = checkObject(e, text, headers(h), "my-article");
@@ -204,21 +207,35 @@ test("hostile objects are reasons, never items", () => {
 });
 
 // --------------------------------------------------------------- folding
-const item = (ms, uid, comment, name = buildEntryName(ms, uid, comment.kind)) =>
-  ({ key: key(name), name, modified: ms, author: { uid, name: uid }, comment });
+const item = (ms, uid, comment, role = "none", name = buildEntryName(ms, uid, comment.kind)) =>
+  ({ key: key(name), name, modified: ms, author: { uid, name: uid, role }, comment });
 
 test("a thread folds oldest first, with resolve and reopen applied in order", () => {
   const a = item(T0, UID, comment({ body: "first" }));
   const b = item(T0 + 10, OTHER, comment({ body: "second" }));
-  const r = item(T0 + 20, OTHER, { v: 1, kind: "resolve", thread: "my-article", ref: a.name });
+  const r = item(T0 + 20, OTHER, { v: 1, kind: "resolve", thread: "my-article", ref: a.name }, "editor");
   let t = foldThread([r, b, a]);
   assert.deepEqual(t.comments.map((c) => c.body), ["first", "second"]);
-  assert.deepEqual(t.comments[0].resolved, { by: { uid: OTHER, name: OTHER }, at: T0 + 20 });
+  assert.deepEqual(t.comments[0].resolved, { by: { uid: OTHER, name: OTHER, role: "editor" }, at: T0 + 20 });
   assert.deepEqual(t.rejected, []);
 
-  const re = item(T0 + 30, UID, { v: 1, kind: "reopen", thread: "my-article", ref: a.name });
+  const re = item(T0 + 30, UID, { v: 1, kind: "reopen", thread: "my-article", ref: a.name }, "viewer");
   t = foldThread([a, b, r, re]);
   assert.equal(t.comments[0].resolved, null);
+});
+
+test("only someone with a role on the site can resolve or reopen", () => {
+  const a = item(T0, UID, comment({ body: "first" }));
+  for (const kind of ["resolve", "reopen"]) {
+    const ev = item(T0 + 10, OTHER, { v: 1, kind, thread: "my-article", ref: a.name }, "none");
+    const t = foldThread([a, ev]);
+    assert.equal(t.comments[0].resolved, null);
+    assert.match(t.rejected[0].reason, new RegExp(`only someone with a role on this site can ${kind}`));
+  }
+  // A stranger cannot undo a member's resolve either.
+  const r = item(T0 + 10, OTHER, { v: 1, kind: "resolve", thread: "my-article", ref: a.name }, "owner");
+  const re = item(T0 + 20, UID, { v: 1, kind: "reopen", thread: "my-article", ref: a.name }, "none");
+  assert.ok(foldThread([a, r, re]).comments[0].resolved);
 });
 
 test("only the author can retract, and an event needs a comment before it", () => {
@@ -232,7 +249,7 @@ test("only the author can retract, and an event needs a comment before it", () =
   t = foldThread([a, byAuthor]);
   assert.equal(t.comments.length, 0);
 
-  const early = item(T0 - 10, OTHER, { v: 1, kind: "resolve", thread: "my-article", ref: a.name });
+  const early = item(T0 - 10, OTHER, { v: 1, kind: "resolve", thread: "my-article", ref: a.name }, "owner");
   t = foldThread([a, early]);
   assert.match(t.rejected[0].reason, /not before it/);
 });

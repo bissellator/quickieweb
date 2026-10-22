@@ -35,7 +35,7 @@ import { signGrant } from "../shared/access-token.mjs";
 import { edgeConfigured, requireEdge, accessSecret, applyEdgeOps } from "./lib/access-edge.mjs";
 import {
   commenterFrom, grantRedirect, sessionCookies, CLEAR_SESSION_COOKIES, ticketFor, settingsFrom,
-  listPending, approve, reject,
+  listPending, approve, reject, removeComment,
 } from "./lib/comments.mjs";
 import { processLogs, readReport, readDay, readDetailWindow } from "./lib/stats.mjs";
 import * as oauthStore from "./lib/oauth-store.mjs";
@@ -665,13 +665,13 @@ async function routeApi({ method, segments, query, headers, body }) {
   // library, and their credential is the qw_commenter cookie, not a console
   // session. Host is not forwarded, so the site travels as ?site= and has to
   // match the one the cookie was signed for.
-  if (head === "comments" && (second === "session" || second === "ticket")) {
+  if (head === "comments" && (second === "session" || second === "ticket" || second === "entry")) {
     const siteId = String(query.get("site") ?? "").trim().toLowerCase();
     if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(siteId)) return json(400, { error: "site is required" });
     const secret = await accessSecret();
 
     if (second === "session" && method === "GET") {
-      const cookies = sessionCookies({ siteId, grant: query.get("g"), secret });
+      const cookies = sessionCookies({ siteId, grant: query.get("g"), secret, site: await registry.getSite(s3, siteId) });
       return {
         status: 302,
         headers: { location: safeNext(query.get("next")), "cache-control": "no-store" },
@@ -695,6 +695,27 @@ async function routeApi({ method, segments, query, headers, body }) {
         credentials: await s3.config.credentials(),
       });
       return json(200, ticket);
+    }
+    // Deleting is moderation, so it is the CMS's job and costs a Lambda call;
+    // reading and posting still do not. The role is looked up NOW, not taken
+    // from the cookie's hint, so a removed editor cannot delete.
+    if (second === "entry" && method === "DELETE") {
+      const site = await registry.getSite(s3, siteId);
+      if (!site) return json(404, { error: "No such site" });
+      const who = commenterFrom(headers, siteId, secret);
+      if (!who) return json(401, { error: "Sign in to delete a comment." });
+      if (!canEdit(roleInSite(who.email, site))) {
+        return json(403, { error: "Only an owner, admin or editor of this site can delete comments." });
+      }
+      const store = storeFor(site);
+      const ops = {
+        list: (prefix) => store.list(prefix, store.LIVE),
+        read: (key) => store.getWithMeta(key, store.LIVE),
+        remove: (key) => store.remove(key, store.LIVE),
+      };
+      const done = await removeComment(ops, { thread: query.get("thread"), name: query.get("name") });
+      console.log(`[${siteId}] comment ${done.key} deleted by ${who.email} (+${done.events} events)`);
+      return json(200, { ...done, by: who.name });
     }
     return json(405, { error: "Method not allowed" });
   }

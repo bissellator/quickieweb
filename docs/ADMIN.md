@@ -138,12 +138,28 @@ every site from the bucket root, so updating it updates every site:
   const c = QWComments.connect();            // site and thread from the URL; or { site, thread }
   const { comments, rejected } = await c.load();
   // c.post({ subject, body })  throws code "signin" -> c.signIn(); returns { pending } when moderated
-  // c.resolve(name) / c.reopen(name) / c.retract(name)
+  // c.resolve(name) / c.reopen(name) / c.retract(name) / c.remove(name)
 </script>
 ```
 
-The site renders the comments itself. The one rule is to render with
+Or let the library draw a default section: `<section data-qw-comments
+data-qw-thread="my-article"></section>` (the journal template does this on
+every article). A site that renders comments itself has one rule: use
 `textContent`, never `innerHTML`.
+
+**Who may do what:**
+
+| | who | how it's enforced |
+| --- | --- | --- |
+| comment | per the site's setting | the Lambda issues the upload ticket only to them |
+| resolve, reopen | anyone with a role on the site (owner, admin, editor, viewer) | the ticket pins `x-amz-meta-role`; every reader ignores a resolve from `none` |
+| retract | the comment's author | every reader compares the uid S3 stored |
+| delete | owners, admins, editors | `DELETE /api/comments/entry`, which looks the role up at that moment |
+
+Members are never moderated: with **Requires approval** on, only people
+without a role go to the queue. The role in a ticket is the one held when the
+ticket was issued, so someone removed from a site can still resolve for up to
+an hour; resolves they made earlier stay.
 
 **Settings** (the console's **Comments** tab): who may comment (anyone
 signed in, members only, or nobody; the default is anyone signed in) and
