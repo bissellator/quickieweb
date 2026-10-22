@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Comments demo - Quickieweb</title>
+<!--
+  A reference renderer for the comments library. Copy what you need; the library
+  does the reading, writing and checking, and this page only decides how it looks.
+
+  Two rules any renderer must keep:
+    1. Text goes on the page with textContent, never innerHTML. A comment body is
+       whatever a stranger typed.
+    2. Do not call c.session() on page load. It asks the Lambda for an upload
+       ticket; doing it on every view puts compute back on the read path. Ask
+       only when someone posts or retracts.
+-->
+<style>
+  :root { --ink: #1d1d1f; --soft: #6e6e73; --rule: #d9d9de; --card: #fff; --bg: #f6f6f8; --accent: #3554d1; --warn: #b3261e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #ececf1; --soft: #a1a1aa; --rule: #34343b; --card: #1c1c21; --bg: #121216; --accent: #8ea2ff; --warn: #ff8a80; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 42rem; margin: 0 auto; padding: 2.5rem 1rem 4rem; }
+  h1 { font-size: 1.6rem; margin: 0 0 .3rem; }
+  .lede { color: var(--soft); margin: 0 0 2rem; }
+  form, .comment { background: var(--card); border: 1px solid var(--rule); border-radius: 8px; padding: 1rem 1.1rem; }
+  form { display: grid; gap: .6rem; margin-bottom: 2rem; }
+  input, textarea { font: inherit; color: inherit; background: transparent; border: 1px solid var(--rule); border-radius: 6px; padding: .55rem .7rem; width: 100%; }
+  textarea { min-height: 7rem; resize: vertical; }
+  .row { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; }
+  .count { color: var(--soft); font-size: .8rem; margin-left: auto; }
+  button { font: inherit; border: 1px solid var(--rule); background: var(--card); color: var(--ink); border-radius: 6px; padding: .4rem .9rem; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.link { border: 0; background: none; color: var(--accent); padding: 0; font-size: .85rem; }
+  .notice { font-size: .9rem; margin: 0; }
+  .notice.err { color: var(--warn); }
+  #list { display: grid; gap: .8rem; }
+  .comment .meta { color: var(--soft); font-size: .8rem; margin: 0 0 .3rem; }
+  .comment .subject { font-weight: 600; margin: 0 0 .2rem; }
+  .comment .body { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 .5rem; }
+  .comment.resolved { opacity: .65; }
+  .comment .actions { display: flex; gap: 1rem; }
+  details { margin-top: 2rem; color: var(--soft); font-size: .85rem; }
+  details pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Comments demo</h1>
+  <p class="lede">A page with comments, served with no compute: the list and each comment
+    come from S3 through the edge, and a new comment is uploaded straight to S3.</p>
+
+  <form id="form" novalidate>
+    <input id="subject" placeholder="Subject (optional)" autocomplete="off">
+    <textarea id="body" placeholder="Write a comment"></textarea>
+    <div class="row">
+      <button class="primary" id="post" type="submit">Post</button>
+      <button id="signin" type="button" hidden>Sign in to comment</button>
+      <span class="count" id="count"></span>
+    </div>
+    <p class="notice" id="notice" hidden></p>
+  </form>
+
+  <div id="list"><p class="notice">Loading comments...</p></div>
+
+  <details id="rejectedBox" hidden>
+    <summary>Not shown: <span id="rejectedCount"></span></summary>
+    <pre id="rejected"></pre>
+  </details>
+</main>
+
+<script src="https://quickieweb.com/__qw/lib/comments.js"></script>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var c = QWComments.connect();
+  var LIMIT = QWComments.limits.bodyChars;
+  var MINE = "qw-comments-uid";
+
+  // Which comments are this viewer's, for the Retract button. A per-viewer
+  // convenience only: retracting someone else's comment is refused by every
+  // reader's fold anyway, whatever this says.
+  function myUid() { try { return localStorage.getItem(MINE); } catch (e) { return null; } }
+  function rememberUid(uid) { try { localStorage.setItem(MINE, uid); } catch (e) { console.warn("cannot remember uid", e); } }
+
+  function notice(text, isError) {
+    var n = $("notice");
+    n.textContent = text || "";
+    n.className = "notice" + (isError ? " err" : "");
+    n.hidden = !text;
+  }
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  function render(thread) {
+    var list = $("list");
+    list.replaceChildren();
+    if (!thread.comments.length) list.append(el("p", "notice", "No comments yet."));
+    var mine = myUid();
+    thread.comments.forEach(function (cm) {
+      var card = el("article", "comment" + (cm.resolved ? " resolved" : ""));
+      card.append(el("p", "meta", cm.author.name + " · " + new Date(cm.at).toLocaleString() +
+        (cm.resolved ? " · resolved by " + cm.resolved.by.name : "")));
+      if (cm.subject) card.append(el("p", "subject", cm.subject));
+      card.append(el("p", "body", cm.body));
+      var actions = el("div", "actions");
+      var act = function (label, fn) {
+        var b = el("button", "link", label);
+        b.type = "button";
+        b.addEventListener("click", function () { run(b, fn); });
+        actions.append(b);
+      };
+      act(cm.resolved ? "Reopen" : "Resolve", function () { return cm.resolved ? c.reopen(cm.name) : c.resolve(cm.name); });
+      if (mine && mine === cm.author.uid) act("Retract", function () { return c.retract(cm.name); });
+      card.append(actions);
+      list.append(card);
+    });
+    // Shown so a tester can see the checks working; a real site might log these instead.
+    $("rejectedBox").hidden = !thread.rejected.length;
+    $("rejectedCount").textContent = thread.rejected.length + " item(s) failed the checks";
+    $("rejected").textContent = thread.rejected.map(function (r) { return r.key + "\n  " + r.reason; }).join("\n");
+  }
+
+  function load() {
+    return c.load().then(render).catch(function (e) {
+      $("list").replaceChildren(el("p", "notice err", "Could not load comments: " + e.message));
+    });
+  }
+
+  // Every write goes through here: sign-in, pending and S3's refusals all
+  // surface. Resolves true only when the write was stored.
+  function run(btn, write) {
+    btn.disabled = true;
+    notice("");
+    return write().then(function (res) {
+      if (res && res.author) rememberUid(res.author.uid);
+      if (res && res.pending) notice("Thanks -- your comment is waiting for approval.");
+      return load().then(function () { return true; });
+    }).catch(function (e) {
+      if (e.code === "signin") {
+        $("signin").hidden = false;
+        notice("Sign in to comment. You'll come straight back here.");
+      } else {
+        notice(e.message, true);
+      }
+      return false;
+    }).then(function (stored) { btn.disabled = false; return stored; });
+  }
+
+  function updateCount() {
+    var n = Array.from($("body").value).length;
+    $("count").textContent = n + " / " + LIMIT;
+    $("count").style.color = n > LIMIT ? "var(--warn)" : "";
+  }
+  $("body").addEventListener("input", updateCount);
+
+  // Sign-in leaves the page, so the draft rides along in sessionStorage and is
+  // put back when the reader returns.
+  var DRAFT = "qw-comments-draft:" + c.thread;
+  $("signin").addEventListener("click", function () {
+    try {
+      sessionStorage.setItem(DRAFT, JSON.stringify({ subject: $("subject").value, body: $("body").value }));
+    } catch (e) { console.warn("draft not saved across sign-in", e); }
+    c.signIn();
+  });
+  try {
+    var saved = JSON.parse(sessionStorage.getItem(DRAFT) || "null");
+    if (saved) { $("subject").value = saved.subject || ""; $("body").value = saved.body || ""; sessionStorage.removeItem(DRAFT); }
+  } catch (e) { console.warn("saved draft unreadable", e); }
+
+  $("form").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    var draft = { subject: $("subject").value.trim(), body: $("body").value };
+    // The same rules S3 and every reader apply, checked before anything is sent.
+    var problems = QWComments.lint({ v: 1, kind: "comment", thread: c.thread, subject: draft.subject || undefined, body: draft.body }, c.thread);
+    if (problems.length) return notice(problems.join("; "), true);
+    // The draft is kept unless it was stored -- a sign-in round trip must not lose it.
+    run($("post"), function () { return c.post(draft); }).then(function (stored) {
+      if (stored) { $("subject").value = ""; $("body").value = ""; updateCount(); }
+    });
+  });
+
+  updateCount();
+  load();
+})();
+</script>
+</body>
+</html>

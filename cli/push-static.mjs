@@ -64,7 +64,10 @@ if (!SITE || !DIR) {
   console.error("usage: node cli/push-static.mjs --site <id> --dir <folder> [--dry-run] [--prune]");
   process.exit(1);
 }
-const badId = checkSiteId(SITE);
+// "www" is reserved so no TENANT can claim the apex; it is the platform's own
+// marketing site, which infra/seed-marketing-site.mjs writes the same way. The
+// registry lookup below still has to find it.
+const badId = SITE === "www" ? null : checkSiteId(SITE);
 if (badId) {
   console.error(`FATAL: site id "${SITE}" ${badId}.`);
   process.exit(1);
