@@ -21,6 +21,8 @@ export const SITE_ROLES = ["owner", "admin", "editor", "viewer"];
 // so a `viewer` page is readable by viewers, editors and admins but not the
 // public. Enforced at the edge (infra/edge/tenant-router.js); decided here.
 export const ACCESS_LEVELS = ["public", "viewer", "editor", "admin"];
+// Who may comment: nobody, anyone who signs in, or only the site's members.
+export const COMMENT_WHO = ["off", "signed-in", "members"];
 export const PLATFORM_ROLES = ["user", "staff"];
 export const STORAGE_DRIVERS = ["buckets", "prefix"];
 
@@ -242,6 +244,24 @@ export function normalizeSite(raw = {}, { now = new Date().toISOString() } = {})
     storage: normalizeStorage(raw.storage),
     members: normalizeMembers(raw.members),
     access: normalizeSiteAccess(raw.access),
+    comments: normalizeSiteComments(raw.comments),
+  };
+}
+
+/**
+ * Who may comment, and whether a comment waits for a site admin before anyone
+ * else can see it. Read by the Lambda when it issues an upload ticket, never by
+ * the edge: a ticket is the only way to write a comment, so deciding who gets
+ * one is the whole policy.
+ *
+ * The default is anyone signed in, unmoderated. Nothing appears on a page that
+ * does not include the comments library, so the default changes no site.
+ */
+export function normalizeSiteComments(raw) {
+  const c = raw && typeof raw === "object" ? raw : {};
+  return {
+    who: COMMENT_WHO.includes(c.who) ? c.who : "signed-in",
+    approval: c.approval === true,
   };
 }
 

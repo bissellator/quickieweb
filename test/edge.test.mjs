@@ -115,6 +115,29 @@ test("Host is normalized before it is matched", async () => {
   assert.equal((await req("acme.quickieweb.com.")).uri, "/sites/acme/index.html", "trailing dot is legal in a Host header");
 });
 
+// ------------------------------------------------------------- platform libraries
+test("/__qw/lib/ serves one shared copy from the bucket root, on every host", async () => {
+  assert.equal((await req("quickieweb.com", "/__qw/lib/comments.js")).uri, "/lib/comments.js");
+  assert.equal((await req("acme.quickieweb.com", "/__qw/lib/comments.js")).uri, "/lib/comments.js");
+});
+
+test("a platform library is public even on a protected site", async () => {
+  reset({ _secret: SECRET, acme: "viewer" });
+  assert.equal((await req("acme.quickieweb.com", "/__qw/lib/comments.js")).uri, "/lib/comments.js");
+  assert.equal((await req("acme.quickieweb.com", "/__qw/lib/../index.html")).statusCode, 404);
+});
+
+test("only a plain .js file name is served from /__qw/lib/", async () => {
+  for (const uri of [
+    "/__qw/lib/", "/__qw/lib/../sites/acme/index.html", "/__qw/lib/a/b.js", "/__qw/lib/x.html",
+    "/__qw/lib/%2e%2e/x.js", "/__qw/lib/COMMENTS.js", "/__qw/lib/.js",
+  ]) {
+    const res = await req("acme.quickieweb.com", uri);
+    assert.equal(res.statusCode, 404, `${uri} must be refused`);
+    assert.ok(!res.uri, `${uri} must not reach the origin`);
+  }
+});
+
 // ------------------------------------------------------------- refusals
 test("an unknown host gets 404, never a default site", async () => {
   for (const host of [

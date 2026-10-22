@@ -109,6 +109,16 @@ async function handler(event) {
   if (uri === '/__qw/session') return await mintSession(siteId, request);
   if (uri === '/__qw/signout') return redirect('/', '', 0);
 
+  // Platform libraries: one copy at lib/ in the bucket ROOT, outside sites/, so
+  // no changeset can reach them and updating one updates every site. Public on
+  // every host, protected or not -- they are code, not content. Only a plain
+  // file name is accepted, so this can never be steered into another prefix.
+  if (uri.substring(0, 10) === '/__qw/lib/') {
+    if (!/^\/__qw\/lib\/[a-z0-9-]+(\.[a-z0-9-]+)*\.js$/.test(uri)) return notFound();
+    request.uri = uri.substring(5);
+    return request;
+  }
+
   // Directory index. CloudFront resolves DefaultRootObject for "/" and nothing
   // else, so /about/ would ask S3 for a key literally named "about/" and get a
   // 403 -- the bucket policy grants GetObject but not ListBucket.
