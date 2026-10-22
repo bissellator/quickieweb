@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 import {
-  readCookie, commenterFrom, grantRedirect, sessionCookies, CLEAR_SESSION_COOKIES, ticketFor, settingsFrom,
+  readCookie, commenterFrom, grantRedirect, sessionCookies, hintCookie, CLEAR_SESSION_COOKIES, ticketFor, settingsFrom,
   listPending, approve, reject, removeComment, PENDING_PREFIX, COMMENTS_PREFIX,
 } from "../admin/lib/comments.mjs";
 import { buildEntryName, checkEntry, checkObject, ticketProblem, COMMENT_LIMITS } from "../shared/comments.mjs";
@@ -218,6 +218,12 @@ test("the hint carries the role at sign-in, for drawing buttons", () => {
   const url = new URL(grantRedirect({ site: s, actor, next: "/a.html", secret: SECRET, gateOrigin: "https://acme.quickieweb.com", now: NOW }));
   const [, hint] = sessionCookies({ siteId: "acme", grant: url.searchParams.get("g"), secret: SECRET, site: s, now: NOW });
   assert.match(hint, /^qw_cmt=editor:Sam%20O;/);
+});
+
+test("the hint is re-issued with the role as it stands, not as it was at sign-in", () => {
+  const who = { email: "sam@example.com", name: "Sam O" };
+  assert.match(hintCookie(who, site()), /^qw_cmt=none:Sam%20O; Secure; SameSite=Lax; Path=\/; Max-Age=43200$/);
+  assert.match(hintCookie(who, site({}, [{ email: "sam@example.com", role: "owner" }])), /^qw_cmt=owner:Sam%20O;/);
 });
 
 test("a member's ticket pins their role and skips the approval queue", () => {

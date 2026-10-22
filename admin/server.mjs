@@ -34,7 +34,7 @@ import { desiredEdgeState, planEdgeSync } from "../shared/access-plan.mjs";
 import { signGrant } from "../shared/access-token.mjs";
 import { edgeConfigured, requireEdge, accessSecret, applyEdgeOps } from "./lib/access-edge.mjs";
 import {
-  commenterFrom, grantRedirect, sessionCookies, CLEAR_SESSION_COOKIES, ticketFor, settingsFrom,
+  commenterFrom, grantRedirect, sessionCookies, hintCookie, CLEAR_SESSION_COOKIES, ticketFor, settingsFrom,
   listPending, approve, reject, removeComment,
 } from "./lib/comments.mjs";
 import { processLogs, readReport, readDay, readDetailWindow } from "./lib/stats.mjs";
@@ -685,16 +685,17 @@ async function routeApi({ method, segments, query, headers, body }) {
     if (second === "ticket" && method === "GET") {
       const site = await registry.getSite(s3, siteId);
       if (!site) return json(404, { error: "No such site" });
+      const commenter = commenterFrom(headers, siteId, secret);
       const ticket = ticketFor({
         site,
-        commenter: commenterFrom(headers, siteId, secret),
+        commenter,
         secret,
         // The function's own role credentials, from the SDK so their expiry
         // comes with them: S3 refuses a policy once the credentials that signed
         // it expire, so the ticket is cut short to match.
         credentials: await s3.config.credentials(),
       });
-      return json(200, ticket);
+      return { ...json(200, ticket), cookies: [hintCookie(commenter, site)] };
     }
     // Deleting is moderation, so it is the CMS's job and costs a Lambda call;
     // reading and posting still do not. The role is looked up NOW, not taken

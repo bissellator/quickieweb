@@ -86,12 +86,21 @@ export function sessionCookies({ siteId, grant, secret, site = null, now = Date.
   // "<role>:<name>". The role is a hint for which buttons to draw and nothing
   // more: readers trust the role S3 stored with each event, and deleting asks
   // the Lambda, which looks the role up again.
-  const role = (site && roleInSite(who.email, site)) || "none";
-  const shown = `${role}:${encodeURIComponent(String(who.name || "Reader").slice(0, 80))}`;
   return [
     `${COMMENTER_COOKIE}=${token}; ${COOKIE_ATTRS}; Max-Age=${COMMENT_SESSION_SEC}`,
-    `${COMMENTER_HINT_COOKIE}=${shown}; ${HINT_ATTRS}; Max-Age=${COMMENT_SESSION_SEC}`,
+    hintCookie(who, site),
   ];
+}
+
+/**
+ * The hint for a commenter, with their role on the site as it stands now. Set
+ * at sign-in, and again with every ticket, so a role granted or taken away
+ * after sign-in reaches the page's buttons at the next post or resolve.
+ */
+export function hintCookie(who, site) {
+  const role = (site && roleInSite(who.email, site)) || "none";
+  const shown = `${role}:${encodeURIComponent(String(who.name || "Reader").slice(0, 80))}`;
+  return `${COMMENTER_HINT_COOKIE}=${shown}; ${HINT_ATTRS}; Max-Age=${COMMENT_SESSION_SEC}`;
 }
 
 export const CLEAR_SESSION_COOKIES = [
