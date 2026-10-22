@@ -36,6 +36,14 @@ export class CommentError extends Error {
 
 const COOKIE_ATTRS = "Secure; HttpOnly; SameSite=Lax; Path=/api/comments";
 
+// The page-readable companion: the display name only, so a static page can show
+// a form or a "Sign in" button without asking the Lambda on every view. It
+// grants nothing -- tickets come from the HttpOnly cookie above -- so a forged
+// one only shows a form whose Post is refused. Read by hintName() in
+// shared/comments.mjs.
+export const COMMENTER_HINT_COOKIE = "qw_cmt";
+const HINT_ATTRS = "Secure; SameSite=Lax; Path=/";
+
 /** One cookie's value from a Cookie header, or null. */
 export function readCookie(headers, name) {
   const raw = headers.cookie ?? headers.Cookie ?? "";
@@ -66,15 +74,26 @@ export function grantRedirect({ site, actor, next, secret, gateOrigin, now = Dat
     `&g=${encodeURIComponent(g)}&next=${encodeURIComponent(next)}`;
 }
 
-/** The Set-Cookie value for a grant, or a 403 if the grant is no good. */
-export function sessionCookie({ siteId, grant, secret, now = Date.now() }) {
+/**
+ * The Set-Cookie values for a grant -- the session, then its hint -- or a 403
+ * if the grant is no good. Both share a lifetime, so the hint never outlives
+ * the session by more than a sign-out on another tab.
+ */
+export function sessionCookies({ siteId, grant, secret, now = Date.now() }) {
   const who = verifyCommenterToken(grant, { kind: "cg1", siteId, maxSec: COMMENT_GRANT_SEC, secret, now });
   if (!who) throw new CommentError("That sign-in link has expired or is not for this site. Sign in again.", 403);
   const token = signCommentSession({ siteId, email: who.email, name: who.name, secret, now });
-  return `${COMMENTER_COOKIE}=${token}; ${COOKIE_ATTRS}; Max-Age=${COMMENT_SESSION_SEC}`;
+  const shown = encodeURIComponent(String(who.name || "Reader").slice(0, 80));
+  return [
+    `${COMMENTER_COOKIE}=${token}; ${COOKIE_ATTRS}; Max-Age=${COMMENT_SESSION_SEC}`,
+    `${COMMENTER_HINT_COOKIE}=${shown}; ${HINT_ATTRS}; Max-Age=${COMMENT_SESSION_SEC}`,
+  ];
 }
 
-export const CLEAR_SESSION_COOKIE = `${COMMENTER_COOKIE}=; ${COOKIE_ATTRS}; Max-Age=0`;
+export const CLEAR_SESSION_COOKIES = [
+  `${COMMENTER_COOKIE}=; ${COOKIE_ATTRS}; Max-Age=0`,
+  `${COMMENTER_HINT_COOKIE}=; ${HINT_ATTRS}; Max-Age=0`,
+];
 
 /**
  * An upload ticket for whoever the cookie names. The site's CURRENT settings

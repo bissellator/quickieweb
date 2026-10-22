@@ -42,7 +42,7 @@ const contentType = (name) =>
  * @param access    the site's default reading level (ACCESS_LEVELS in site.mjs)
  * @returns { files, posts, pages, warnings }
  */
-export function renderSite({ template, site, theme = {}, records = [], access = "public", base = "", now = new Date() }) {
+export function renderSite({ template, site, theme = {}, records = [], access = "public", base = "", comments = false, now = new Date() }) {
   const missing = ["index", "article", "page", "404"].filter((l) => !template.layouts[l]);
   if (missing.length) {
     throw new RenderError(
@@ -76,7 +76,7 @@ export function renderSite({ template, site, theme = {}, records = [], access = 
         site, template, theme: resolved,
         posts: pageBase === base ? posts : postRecords.map((r) => projectPost(r, site, pageBase)),
         pages: pageBase === base ? pages : pageRecords.map((r) => projectPage(r, site, pageBase)),
-        nav: buildNav(site, pageRecords, currentUrl, pageBase), base: pageBase, now,
+        nav: buildNav(site, pageRecords, currentUrl, pageBase), base: pageBase, comments, now,
       }),
       ...extra,
     };

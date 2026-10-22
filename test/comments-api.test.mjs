@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 import {
-  readCookie, commenterFrom, grantRedirect, sessionCookie, CLEAR_SESSION_COOKIE, ticketFor, settingsFrom,
+  readCookie, commenterFrom, grantRedirect, sessionCookies, CLEAR_SESSION_COOKIES, ticketFor, settingsFrom,
   listPending, approve, reject, PENDING_PREFIX, COMMENTS_PREFIX,
 } from "../admin/lib/comments.mjs";
 import { buildEntryName, checkEntry, checkObject, ticketProblem, COMMENT_LIMITS } from "../shared/comments.mjs";
@@ -36,18 +36,22 @@ const site = (comments = {}, members = [{ email: "owner@acme.test", role: "owner
 /** Sign in on the console host, follow the redirect, keep the cookie. */
 function signIn(s = site(), now = NOW) {
   const url = new URL(grantRedirect({ site: s, actor, next: "/my-article.html", secret: SECRET, gateOrigin: "https://acme.quickieweb.com", now }));
-  const setCookie = sessionCookie({ siteId: url.searchParams.get("site"), grant: url.searchParams.get("g"), secret: SECRET, now });
-  return { url, setCookie, headers: { cookie: `other=1; ${setCookie.split(";")[0]}` } };
+  const [setCookie, hint] = sessionCookies({ siteId: url.searchParams.get("site"), grant: url.searchParams.get("g"), secret: SECRET, now });
+  return { url, setCookie, hint, headers: { cookie: `other=1; ${setCookie.split(";")[0]}` } };
 }
 
 // ------------------------------------------------------------------ sign-in
 test("sign-in lands on the site's own host, and comes back to the page", () => {
-  const { url, setCookie } = signIn();
+  const { url, setCookie, hint } = signIn();
   assert.equal(url.origin + url.pathname, "https://acme.quickieweb.com/api/comments/session");
   assert.equal(url.searchParams.get("next"), "/my-article.html");
   assert.match(setCookie, /^qw_commenter=cs1\.acme\./);
   assert.match(setCookie, /; Secure; HttpOnly; SameSite=Lax; Path=\/api\/comments; Max-Age=43200$/);
-  assert.match(CLEAR_SESSION_COOKIE, /^qw_commenter=; .*Max-Age=0$/);
+  // The hint is readable by the page (no HttpOnly), site-wide, and holds the name only.
+  assert.equal(hint, `qw_cmt=${encodeURIComponent(actor.name)}; Secure; SameSite=Lax; Path=/; Max-Age=43200`);
+  assert.ok(!hint.includes(actor.email) && !hint.includes(encodeURIComponent(actor.email)));
+  assert.match(CLEAR_SESSION_COOKIES[0], /^qw_commenter=; .*Max-Age=0$/);
+  assert.match(CLEAR_SESSION_COOKIES[1], /^qw_cmt=; .*Path=\/; Max-Age=0$/);
 });
 
 test("someone who may not comment is told why at sign-in, not bounced", () => {
@@ -58,9 +62,9 @@ test("someone who may not comment is told why at sign-in, not bounced", () => {
 test("an expired, foreign or missing grant does not become a session", () => {
   const { url } = signIn();
   const g = url.searchParams.get("g");
-  assert.throws(() => sessionCookie({ siteId: "acme", grant: g, secret: SECRET, now: NOW + 121e3 }), /expired/);
-  assert.throws(() => sessionCookie({ siteId: "beta", grant: g, secret: SECRET, now: NOW }), /not for this site/);
-  assert.throws(() => sessionCookie({ siteId: "acme", grant: null, secret: SECRET, now: NOW }), (e) => e.status === 403);
+  assert.throws(() => sessionCookies({ siteId: "acme", grant: g, secret: SECRET, now: NOW + 121e3 }), /expired/);
+  assert.throws(() => sessionCookies({ siteId: "beta", grant: g, secret: SECRET, now: NOW }), /not for this site/);
+  assert.throws(() => sessionCookies({ siteId: "acme", grant: null, secret: SECRET, now: NOW }), (e) => e.status === 403);
 });
 
 test("the cookie identifies the commenter on its own site only", () => {

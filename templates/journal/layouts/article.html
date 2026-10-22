@@ -39,5 +39,6 @@
 {{/if}}{{#if post.tags}}
   <p class="tags">{{#each post.tags}}<span class="tag-chip">{{.}}</span> {{/each}}</p>
 {{/if}}</article>
-</main>
+{{#if site.hasComments}}<section class="comments" data-qw-comments data-qw-thread="{{post.slug}}" aria-label="Comments"></section>
+{{/if}}</main>
 {{> footer}}

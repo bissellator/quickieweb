@@ -342,6 +342,22 @@ function ticketProblem(t) {
 }
 
 /**
+ * The commenter's display name from the qw_cmt hint cookie, or null.
+ *
+ * NOT a credential. The real session (qw_commenter) is HttpOnly, so a page can
+ * never see it; this companion, set beside it by /api/comments/session, only
+ * lets a page decide between a form and a "Sign in" button without asking the
+ * Lambda on every view. A forged or stale hint just shows a form whose Post is
+ * refused with code "signin", and the UI falls back to the button.
+ */
+function hintName(cookies) {
+  var m = /(?:^|;\s*)qw_cmt=([^;]*)/.exec(String(cookies || ""));
+  if (!m || !m[1]) return null;
+  // An undecodable hint is the same as no hint: there is nothing to show for it.
+  try { return decodeURIComponent(m[1]) || null; } catch (e) { return null; }
+}
+
+/**
  * The client. `env` is everything it touches outside itself -- fetch, location,
  * FormData, Blob, a clock and the hosted apex -- so Node can drive it with
  * fakes and a browser hands it window's.
@@ -486,6 +502,13 @@ function createClient(env, opts) {
     session: session,
     signInUrl: signInUrl,
     signIn: function () { env.location.assign(signInUrl()); },
+    /** Who the hint cookie says is signed in to comment here, or null. */
+    commenter: function () { return hintName(env.cookie ? env.cookie() : ""); },
+    signOut: async function () {
+      ticket = null;
+      return (await ok(await env.fetch(origin + "/api/comments/session?site=" + encodeURIComponent(site),
+        { method: "DELETE", credentials: "same-origin" }), "signing out")).json();
+    },
     post: function (c) {
       var obj = { v: 1, kind: "comment", thread: thread, body: c && c.body };
       if (c && c.subject) obj.subject = c.subject;
@@ -497,16 +520,204 @@ function createClient(env, opts) {
   });
 }
 
+/**
+ * The default comment section, for a page that wants comments without writing a
+ * renderer: any element carrying data-qw-comments gets one (see autoMount in
+ * clientSource). Everything a stranger wrote goes in with textContent. Class
+ * names are qw-c-*, styled by DEFAULT_CSS at the lowest specificity, so a
+ * template restyles them with ordinary selectors or the --qw-c-* properties.
+ */
+function mountUi(root, client, doc, win) {
+  var h = function (tag, cls, text) {
+    var e = doc.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = text;
+    return e;
+  };
+  var button = function (cls, text) { var b = h("button", cls, text); b.type = "button"; return b; };
+  // Storage is a convenience (a draft, which comments are mine); a browser that
+  // refuses it still gets a working section, and the console says why.
+  var store = function (kind, key, value) {
+    try {
+      var s = win[kind];
+      if (value === undefined) return s.getItem(key);
+      if (value === null) s.removeItem(key); else s.setItem(key, value);
+    } catch (e) { win.console.warn("QWComments: " + kind + " is unavailable", e); }
+    return null;
+  };
+  var DRAFT = "qw-comments-draft:" + client.site + ":" + client.thread;
+  var MINE = "qw-comments-uid";
+
+  root.classList.add("qw-comments");
+  root.replaceChildren();
+  var list = h("div", "qw-c-list");
+  var composer = h("div", "qw-c-composer");
+  var status = h("p", "qw-c-note");
+  status.setAttribute("role", "status");
+  status.hidden = true;
+  root.append(h("h2", "qw-c-title", root.getAttribute("data-qw-title") || "Comments"), list, composer, status);
+
+  function say(text, isError) {
+    status.textContent = text || "";
+    status.hidden = !text;
+    status.className = "qw-c-note" + (isError ? " qw-c-error" : "");
+  }
+
+  function render(thread) {
+    list.replaceChildren();
+    if (!thread.comments.length) list.append(h("p", "qw-c-note", "No comments yet."));
+    var mine = store("localStorage", MINE);
+    var signedIn = Boolean(client.commenter());
+    thread.comments.forEach(function (c) {
+      var card = h("article", "qw-c-comment" + (c.resolved ? " qw-c-resolved" : ""));
+      var when = new Date(c.at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+      var meta = h("p", "qw-c-meta");
+      meta.append(h("strong", "qw-c-author", c.author.name), doc.createTextNode(" · " + when +
+        (c.resolved ? " · resolved by " + c.resolved.by.name : "")));
+      card.append(meta);
+      if (c.subject) card.append(h("p", "qw-c-subject", c.subject));
+      card.append(h("p", "qw-c-body", c.body));
+      if (signedIn) {
+        var acts = h("div", "qw-c-actions");
+        var add = function (label, fn) {
+          var b = button("qw-c-link", label);
+          b.addEventListener("click", function () { act(b, fn); });
+          acts.append(b);
+        };
+        add(c.resolved ? "Reopen" : "Resolve", function () { return c.resolved ? client.reopen(c.name) : client.resolve(c.name); });
+        if (mine && mine === c.author.uid) add("Retract", function () { return client.retract(c.name); });
+        card.append(acts);
+      }
+      list.append(card);
+    });
+  }
+
+  function load() {
+    return client.load().then(render, function (e) {
+      list.replaceChildren(h("p", "qw-c-note qw-c-error", "Comments could not be loaded: " + e.message));
+    });
+  }
+
+  // Every write: resolves true once stored. Sign-in, approval and S3's
+  // refusals all reach the reader, none of them silently.
+  function act(btn, write) {
+    btn.disabled = true;
+    say("");
+    return write().then(function (res) {
+      if (res && res.author) store("localStorage", MINE, res.author.uid);
+      if (res && res.pending) say("Thanks. Your comment will appear once it has been approved.");
+      return load().then(function () { return true; });
+    }, function (e) {
+      if (e.code === "signin") {
+        signInBox();
+        say("Sign in again to post. Your draft is kept.");
+      } else {
+        say(e.message, true);
+      }
+      return false;
+    }).then(function (stored) { btn.disabled = false; return stored; });
+  }
+
+  function signInBox() {
+    composer.replaceChildren();
+    var b = button("qw-c-button qw-c-primary", "Sign in to comment");
+    b.addEventListener("click", function () { client.signIn(); });
+    composer.append(b, h("p", "qw-c-hint", "With Google or Microsoft. Your name is shown with what you write; your email address never is."));
+  }
+
+  function form(name) {
+    composer.replaceChildren();
+    var f = h("form", "qw-c-form");
+    var text = h("textarea", "qw-c-input");
+    text.rows = 4;
+    text.placeholder = "Add a comment";
+    text.setAttribute("aria-label", "Comment");
+    text.value = store("sessionStorage", DRAFT) || "";
+    var count = h("span", "qw-c-count");
+    var post = h("button", "qw-c-button qw-c-primary", "Post");
+    post.type = "submit";
+    var out = button("qw-c-link", "Sign out");
+    var row = h("div", "qw-c-row");
+    row.append(post, count);
+    var who = h("p", "qw-c-hint");
+    who.append(doc.createTextNode("Commenting as "), h("strong", null, name), doc.createTextNode(" · "), out);
+    f.append(text, row, who);
+    var update = function () {
+      var n = Array.from(text.value).length;
+      count.textContent = n + " / " + LIMITS.bodyChars;
+      count.classList.toggle("qw-c-over", n > LIMITS.bodyChars);
+      // Kept across a sign-in round trip, which leaves the page.
+      store("sessionStorage", DRAFT, text.value ? text.value : null);
+    };
+    text.addEventListener("input", update);
+    update();
+    f.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var problems = lintComment({ v: 1, kind: "comment", thread: client.thread, body: text.value }, client.thread);
+      if (problems.length) return say(problems.join("; "), true);
+      act(post, function () { return client.post({ body: text.value }); }).then(function (stored) {
+        if (stored) { text.value = ""; update(); }
+      });
+    });
+    out.addEventListener("click", function () {
+      act(out, function () { return client.signOut(); }).then(compose);
+    });
+    composer.append(f);
+  }
+
+  function compose() {
+    var name = client.commenter();
+    if (name) form(name); else signInBox();
+  }
+
+  compose();
+  return load();
+}
+
 const PURE = [
   textProblem, validThread, validSite, threadFromPath, siteFromHost, slugify, stampOf, buildEntryName,
   parseEntryName, byteLength, lintComment, decodeXml, xmlTag, parseListXml, checkEntry, checkObject,
-  foldThread, commentError, ticketProblem, createClient,
+  foldThread, commentError, ticketProblem, hintName, createClient, mountUi,
 ];
 
 export {
   textProblem, validThread, validSite, threadFromPath, siteFromHost, slugify, stampOf, buildEntryName,
-  parseEntryName, lintComment, parseListXml, checkEntry, checkObject, foldThread, ticketProblem, createClient,
+  parseEntryName, lintComment, parseListXml, checkEntry, checkObject, foldThread, ticketProblem, hintName, createClient,
 };
+
+/**
+ * The default section's look: structure and spacing only, colours derived from
+ * the page's own text colour, and :where() so any template rule wins. Override
+ * --qw-c-accent (buttons) or style the qw-c-* classes directly.
+ */
+export const DEFAULT_CSS = [
+  ":where(.qw-comments){--qw-c-accent:#3554d1;--qw-c-rule:color-mix(in srgb,currentColor 16%,transparent);",
+  "--qw-c-soft:color-mix(in srgb,currentColor 62%,transparent);display:grid;gap:1rem;margin:3rem 0 0}",
+  ":where(.qw-comments) :where(.qw-c-title){font-size:1.25rem;margin:0}",
+  ":where(.qw-comments) :where(.qw-c-list){display:grid;gap:.75rem}",
+  ":where(.qw-comments) :where(.qw-c-comment){border:1px solid var(--qw-c-rule);border-radius:8px;padding:.85rem 1rem}",
+  ":where(.qw-comments) :where(.qw-c-resolved){opacity:.6}",
+  ":where(.qw-comments) :where(.qw-c-meta,.qw-c-hint,.qw-c-count){color:var(--qw-c-soft);font-size:.85rem;margin:0}",
+  ":where(.qw-comments) :where(.qw-c-meta){margin:0 0 .35rem}",
+  ":where(.qw-comments) :where(.qw-c-author){color:currentColor}",
+  ":where(.qw-comments) :where(.qw-c-subject){font-weight:600;margin:0 0 .2rem}",
+  ":where(.qw-comments) :where(.qw-c-body){white-space:pre-wrap;overflow-wrap:anywhere;margin:0}",
+  ":where(.qw-comments) :where(.qw-c-actions){display:flex;gap:1rem;margin-top:.5rem}",
+  ":where(.qw-comments) :where(.qw-c-form,.qw-c-composer){display:grid;gap:.6rem}",
+  ":where(.qw-comments) :where(.qw-c-input){font:inherit;color:inherit;background:transparent;width:100%;box-sizing:border-box;",
+  "border:1px solid var(--qw-c-rule);border-radius:6px;padding:.6rem .75rem;resize:vertical}",
+  ":where(.qw-comments) :where(.qw-c-row){display:flex;align-items:center;gap:.8rem}",
+  ":where(.qw-comments) :where(.qw-c-count){margin-left:auto}",
+  ":where(.qw-comments) :where(.qw-c-over){color:#c0392b}",
+  ":where(.qw-comments) :where(.qw-c-button){font:inherit;cursor:pointer;border-radius:6px;padding:.45rem 1rem;",
+  "border:1px solid var(--qw-c-rule);background:transparent;color:inherit;justify-self:start}",
+  ":where(.qw-comments) :where(.qw-c-primary){background:var(--qw-c-accent);border-color:var(--qw-c-accent);color:#fff}",
+  ":where(.qw-comments) :where(.qw-c-link){font:inherit;font-size:.85rem;cursor:pointer;border:0;padding:0;background:none;",
+  "color:var(--qw-c-accent)}",
+  ":where(.qw-comments) :where(button:disabled){opacity:.5;cursor:default}",
+  ":where(.qw-comments) :where(.qw-c-note){margin:0;color:var(--qw-c-soft)}",
+  ":where(.qw-comments) :where(.qw-c-error){color:#c0392b}",
+].join("");
 
 /**
  * The browser library, served at /__qw/lib/comments.js. `apex` is the hosted
@@ -518,6 +729,10 @@ export {
  *   const { comments, rejected } = await c.load();
  *   await c.post({ subject, body });            // throws code "signin" -> c.signIn()
  *                                               // { pending: true } -> awaiting approval
+ *
+ * Or, with no code at all, the default section on any element that asks:
+ *
+ *   <section data-qw-comments data-qw-thread="my-article"></section>
  */
 export function clientSource({ apex }) {
   if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(apex ?? "")) throw new Error(`not a hosted domain: ${apex}`);
@@ -529,21 +744,60 @@ export function clientSource({ apex }) {
 
 ${PURE.map(String).join("\n\n")}
 
+  function connect(opts) {
+    return createClient({
+      fetch: window.fetch.bind(window),
+      location: window.location,
+      FormData: window.FormData,
+      Blob: window.Blob,
+      now: function () { return Date.now(); },
+      cookie: function () { return document.cookie; },
+      apex: APEX,
+    }, opts);
+  }
+
+  var cssDone = false;
+  function mount(el, opts) {
+    if (!cssDone) {
+      var style = document.createElement("style");
+      style.setAttribute("data-qw-comments-css", "");
+      style.textContent = ${JSON.stringify(DEFAULT_CSS)};
+      document.head.prepend(style);
+      cssDone = true;
+    }
+    opts = opts || {};
+    var client;
+    try {
+      client = connect({
+        site: opts.site || el.getAttribute("data-qw-site") || undefined,
+        thread: opts.thread || el.getAttribute("data-qw-thread") || undefined,
+      });
+    } catch (e) {
+      // Shown where the section would be, not just logged: a misconfigured page
+      // should say so to whoever is looking at it.
+      el.textContent = "Comments are unavailable here: " + e.message;
+      console.error("QWComments:", e);
+      return Promise.resolve(null);
+    }
+    el.setAttribute("data-qw-mounted", "");
+    return mountUi(el, client, document, window).then(function () { return client; });
+  }
+
+  function autoMount() {
+    var els = document.querySelectorAll("[data-qw-comments]:not([data-qw-mounted])");
+    for (var i = 0; i < els.length; i++) mount(els[i]);
+  }
+
   window.QWComments = Object.freeze({
-    connect: function (opts) {
-      return createClient({
-        fetch: window.fetch.bind(window),
-        location: window.location,
-        FormData: window.FormData,
-        Blob: window.Blob,
-        now: function () { return Date.now(); },
-        apex: APEX,
-      }, opts);
-    },
+    connect: connect,
+    mount: mount,
     lint: lintComment,
     threadFromPath: threadFromPath,
     limits: LIMITS,
   });
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", autoMount);
+  else autoMount();
 })();
 `;
 }

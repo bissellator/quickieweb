@@ -316,3 +316,9 @@ a { color: inherit; }
 
 .footer-credit { opacity: .75; }
 .footer-credit a { color: inherit; }
+
+/* Comments. The platform library builds the section (qw-c-* classes) and
+   styles it at zero specificity; this only hands it the journal's accent and
+   measure. */
+.comments { --qw-c-accent: var(--color-accent); max-width: var(--layout-measure); margin: 3.5rem 0 0; }
+.comments .qw-c-title { font-family: inherit; }

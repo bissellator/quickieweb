@@ -1,7 +1,7 @@
 {
   "id": "journal",
   "name": "Journal",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "engine": "quickieweb-template@1",
   "description": "An editorial layout: serif headlines, a card index, and a provenance card for posts that respond to something else.",
   "author": "Quickieweb",

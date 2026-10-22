@@ -265,7 +265,7 @@ test("a ticket is checked before a browser will upload with it", () => {
 // The generated source is evaluated against a fake window, so this exercises
 // the exact text served at /__qw/lib/comments.js.
 
-function boot({ host = "quickieweb.com", path = "/my-article.html", routes, clock = T0 }) {
+function boot({ host = "quickieweb.com", path = "/my-article.html", routes, clock = T0, cookie = "" }) {
   const calls = [];
   const assigned = [];
   const window = {
@@ -281,10 +281,13 @@ function boot({ host = "quickieweb.com", path = "/my-article.html", routes, cloc
       return route;
     },
   };
+  // Just enough page for the bootstrap: no [data-qw-comments] element, so the
+  // auto-mount finds nothing, and a cookie jar the hint is read from.
+  const document = { readyState: "complete", cookie, querySelectorAll: () => [] };
   const realNow = Date.now;
   Date.now = () => clock;
   try {
-    new Function("window", clientSource({ apex: "quickieweb.com" }))(window);
+    new Function("window", "document", clientSource({ apex: "quickieweb.com" }))(window, document);
   } finally {
     Date.now = realNow;
   }
@@ -310,6 +313,19 @@ test("connect works out the site and thread from where it is loaded", () => {
   assert.throws(() => Q.connect({ thread: "Bad Id" }), /not a valid thread/);
   assert.throws(() => boot({ host: "jeffseats.com", routes: () => null }).Q.connect(), /pass \{ site/);
   assert.equal(boot({ host: "jeffseats.com", routes: () => null }).Q.connect({ site: "jeffseats" }).site, "jeffseats");
+});
+
+test("commenter() reads the hint cookie; signOut clears the session and forgets the ticket", async () => {
+  assert.equal(boot({ routes: () => null }).Q.connect().commenter(), null);
+  const { Q, calls } = boot({
+    cookie: "qw_cmt=Sam%20O",
+    routes: (url, init) => (url.startsWith("https://quickieweb.com/api/comments/session?site=www") && init.method === "DELETE"
+      ? new Response(JSON.stringify({ signedOut: true }), { status: 200 }) : null),
+  });
+  const c = Q.connect();
+  assert.equal(c.commenter(), "Sam O");
+  assert.deepEqual(await c.signOut(), { signedOut: true });
+  assert.equal(calls[0].init.credentials, "same-origin");
 });
 
 test("load lists, fetches, checks and folds -- and reports what it refused", async () => {

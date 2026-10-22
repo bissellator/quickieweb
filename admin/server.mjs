@@ -34,7 +34,7 @@ import { desiredEdgeState, planEdgeSync } from "../shared/access-plan.mjs";
 import { signGrant } from "../shared/access-token.mjs";
 import { edgeConfigured, requireEdge, accessSecret, applyEdgeOps } from "./lib/access-edge.mjs";
 import {
-  commenterFrom, grantRedirect, sessionCookie, CLEAR_SESSION_COOKIE, ticketFor, settingsFrom,
+  commenterFrom, grantRedirect, sessionCookies, CLEAR_SESSION_COOKIES, ticketFor, settingsFrom,
   listPending, approve, reject,
 } from "./lib/comments.mjs";
 import { processLogs, readReport, readDay, readDetailWindow } from "./lib/stats.mjs";
@@ -419,6 +419,7 @@ async function rebuild(ctx) {
 
   const { files, warnings } = renderSite({
     template, site: site.site, theme: site.theme, records, access: site.access.default,
+    comments: site.comments.who !== "off",
   });
   for (const w of warnings) console.warn(`[${site.siteId}] theme: ${w}`);
   await writeSummaries(store, records);
@@ -562,7 +563,10 @@ async function servePreview(segments) {
     const records = (await allArticles(store)).map((a) => normalizeContent(a));
     // base = this preview's own prefix, which every relative link in the output
     // then resolves back through.
-    files = renderSite({ template, site: site.site, theme: site.theme, records, access: site.access.default, base }).files;
+    files = renderSite({
+      template, site: site.site, theme: site.theme, records, access: site.access.default, base,
+      comments: site.comments.who !== "off",
+    }).files;
     cacheFiles(token, files);
   }
 
@@ -667,16 +671,16 @@ async function routeApi({ method, segments, query, headers, body }) {
     const secret = await accessSecret();
 
     if (second === "session" && method === "GET") {
-      const cookie = sessionCookie({ siteId, grant: query.get("g"), secret });
+      const cookies = sessionCookies({ siteId, grant: query.get("g"), secret });
       return {
         status: 302,
         headers: { location: safeNext(query.get("next")), "cache-control": "no-store" },
-        cookies: [cookie],
+        cookies,
         body: "",
       };
     }
     if (second === "session" && method === "DELETE") {
-      return { ...json(200, { signedOut: true }), cookies: [CLEAR_SESSION_COOKIE] };
+      return { ...json(200, { signedOut: true }), cookies: CLEAR_SESSION_COOKIES };
     }
     if (second === "ticket" && method === "GET") {
       const site = await registry.getSite(s3, siteId);

@@ -254,8 +254,9 @@ export function normalizeSite(raw = {}, { now = new Date().toISOString() } = {})
  * the edge: a ticket is the only way to write a comment, so deciding who gets
  * one is the whole policy.
  *
- * The default is anyone signed in, unmoderated. Nothing appears on a page that
- * does not include the comments library, so the default changes no site.
+ * The default is anyone signed in, unmoderated. A site shows comments once its
+ * template renders the section (site.hasComments, journal 1.5.0 onward) -- so a
+ * site on such a template gets them at its next publish unless this is "off".
  */
 export function normalizeSiteComments(raw) {
   const c = raw && typeof raw === "object" ? raw : {};

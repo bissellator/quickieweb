@@ -20,6 +20,11 @@ export const SHAPES = {
     org: "string", orgUrl: "string", locale: "string", language: "string", lang: "string",
     feedUrl: "string", podcastUrl: "string", hasPodcast: "boolean",
     homeUrl: "string", faviconUrl: "string",
+    // True when the site takes comments (its Comments setting is not "off").
+    // An article layout then renders <section data-qw-comments
+    // data-qw-thread="{{post.slug}}"></section>, and the platform's comments
+    // library -- already in template.scripts -- fills it in the browser.
+    hasComments: "boolean",
   },
   build: { year: "string", generatedAt: "string", generator: "string" },
   templateInfo: { id: "string", name: "string", version: "string", stylesheets: "string[]", scripts: "string[]" },
@@ -429,7 +434,9 @@ export function buildNav(site, pageRecords, currentUrl = null, base = "") {
  * Everything common to every layout. Per-layout roots (`post`, `page`) are added
  * by the renderer.
  */
-export function buildViewModel({ site, template, theme, posts, pages, nav = [], base = "", now = new Date() }) {
+export const COMMENTS_LIB = "/__qw/lib/comments.js";
+
+export function buildViewModel({ site, template, theme, posts, pages, nav = [], base = "", comments = false, now = new Date() }) {
   const hasPodcast = posts.some((p) => p.isPodcast && p.audio?.url);
   return {
     site: {
@@ -450,6 +457,7 @@ export function buildViewModel({ site, template, theme, posts, pages, nav = [], 
       feedUrl: linkTo("feed.xml", base),
       podcastUrl: hasPodcast ? linkTo("podcast.xml", base) : "",
       hasPodcast,
+      hasComments: comments,
       // The home link. Named rather than left as "/" so a template never has to
       // hardcode a root path, which is the one thing that would break a preview.
       homeUrl: linkTo("index.html", base),
@@ -467,14 +475,20 @@ export function buildViewModel({ site, template, theme, posts, pages, nav = [], 
       stylesheets: ["assets/theme.css", ...(template.manifest.styles ?? []).map((s) => `assets/${s.split("/").pop()}`)]
         .map((u) => linkTo(u, base)),
       // search.js and gallery.js are prepended by the platform, not declared by
-      // the template; the template's own `scripts` follow them. All of it arrives
+      // the template; the template's own `scripts` follow them. On a site that
+      // takes comments the comments library comes first of all: a root path,
+      // because the edge serves it at /__qw/lib/ on every site host, never
+      // from the site's own files. All of it arrives
       // through {{#each template.scripts}} -- the validator refuses any other
       // <script> -- so the URLs come from here, never from a template's markup.
       // A template with `platformAssets: false` gets only its own.
       scripts: [
-        ...(template.manifest.platformAssets === false ? [] : ["assets/search.js", "assets/gallery.js"]),
-        ...(template.manifest.scripts ?? []).map((s) => `assets/${s.split("/").pop()}`),
-      ].map((u) => linkTo(u, base)),
+        ...(comments ? [COMMENTS_LIB] : []),
+        ...[
+          ...(template.manifest.platformAssets === false ? [] : ["assets/search.js", "assets/gallery.js"]),
+          ...(template.manifest.scripts ?? []).map((s) => `assets/${s.split("/").pop()}`),
+        ].map((u) => linkTo(u, base)),
+      ],
     },
     theme: nestTokens(theme),
     posts,
