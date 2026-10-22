@@ -45,7 +45,9 @@ h1{font-size:1.45rem;margin:0}
   letter-spacing:.07em;padding:.12rem .4rem;border-radius:3px;background:var(--rule);color:var(--soft)}
 .pill.published{background:var(--ok);color:#fff}
 .pill.audio{background:#5b3a8e;color:#fff}
-.grid{display:grid;gap:.9rem}
+/* minmax(0,1fr), not the implicit auto track: an auto track grows to its widest
+   child, so one oversized image in the body widened every field on the form. */
+.grid{display:grid;grid-template-columns:minmax(0,1fr);gap:.9rem}
 .row{display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:.9rem}
 label{display:grid;gap:.28rem;font-size:.82rem;color:var(--soft)}
 /* The text-field width below would stretch radios and checkboxes across the
@@ -68,7 +70,14 @@ legend{font-family:var(--mono);font-size:.68rem;text-transform:uppercase;
 code{font-family:var(--mono);font-size:.88em}
 
 /* ------------------------------------------------------------- editor body */
-.bodywrap { display: grid; gap: .4rem; }
+#tagsField { display: grid; gap: .4rem; }
+.tagpicks { display: flex; flex-wrap: wrap; gap: .35rem .5rem; }
+.tagpicks label { display: inline-flex; align-items: center; gap: .3rem; font-size: .85rem;
+  border: 1px solid var(--rule); border-radius: 999px; padding: .15rem .6rem; cursor: pointer; }
+.tagpicks label:has(input:checked) { border-color: var(--accent); background: var(--card); }
+.tagpicks input { width: auto; margin: 0; }
+.tagadd { display: flex; gap: .5rem; max-width: 22rem; }
+.bodywrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: .4rem; }
 .bodyhead { display: flex; align-items: center; gap: .8rem; }
 .bodyhead .lbl { font-size: .82rem; color: var(--soft); }
 .wordcount { font-family: var(--mono); font-size: .72rem; color: var(--faint); margin-left: auto; }
@@ -88,6 +97,12 @@ code{font-family:var(--mono);font-size:.88em}
 .ck.ck-editor__editable p { margin: 0 0 .9rem; line-height: 1.65; }
 .ck.ck-editor__editable blockquote {
   border-left: 3px solid var(--accent); padding-left: 1rem; margin-left: 0; font-style: italic; }
+/* CKEditor makes a block image display:table, which sizes itself to the img's
+   width attribute (1422 on migrated posts) before max-width can apply. A block
+   that cannot exceed the column keeps the editor the width of the form. */
+.ck.ck-editor__editable .image { display: block; max-width: 100%; }
+.ck.ck-editor__editable .image > figcaption { display: block; }
+.ck.ck-editor__editable img { max-width: 100%; height: auto; }
 
 /* --------------------------------------------------------------- stats */
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));

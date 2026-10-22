@@ -9,6 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 
 import {
   putStaticPage, listStaticPages, readStaticPage, removeStaticPage, stageStaticPages,
@@ -39,8 +40,9 @@ function fakeStore() {
       ops.push(`copy ${from} -> ${to}`);
     },
     async list(prefix = "") {
+      // S3's ETag for a single-part upload is the MD5 of the bytes.
       return [...objects.keys()].filter((k) => k.startsWith(prefix))
-        .map((k) => ({ key: k, size: objects.get(k).length }));
+        .map((k) => ({ key: k, size: objects.get(k).length, etag: createHash("md5").update(objects.get(k)).digest("hex") }));
     },
   };
 }
@@ -226,6 +228,21 @@ test("re-staging copies inside the bucket, so binary files survive it, and wins"
   assert.ok(store.objects.get("assets/cast.png").equals(PNG),
     "the static file wins over whatever the rebuild wrote there");
   assert.deepEqual(store.ops.slice(-1), [`copy ${STATIC_PREFIX}assets/cast.png -> assets/cast.png`]);
+});
+
+test("re-staging copies only what differs from its source", async () => {
+  const store = fakeStore();
+  await putStaticPage(store, "pricing.html", PAGE);
+  await putStaticPage(store, "assets/cast.png", PNG);
+  await stageStaticPages(store);
+  // A rebuild re-rendered pricing.html over the static copy; the image is untouched.
+  store.objects.set("pricing.html", Buffer.from("the renderer's page"));
+  store.ops.length = 0;
+
+  const staged = await stageStaticPages(store);
+  assert.deepEqual(staged, ["assets/cast.png", "pricing.html"], "every static path is still reported");
+  assert.deepEqual(store.ops, [`copy ${STATIC_PREFIX}pricing.html -> pricing.html`], "the unchanged image is not copied again");
+  assert.equal(store.text("pricing.html"), PAGE);
 });
 
 test("re-staging a site with no static files does nothing", async () => {

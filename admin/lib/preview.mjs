@@ -127,3 +127,67 @@ export const PREVIEW_HEADERS = {
   "x-frame-options": "SAMEORIGIN",
   "content-security-policy": "frame-ancestors 'self'",
 };
+
+// ---------------------------------------------------------------- media view
+//
+// The editor shows a post's images, and for a protected site the site's own
+// host answers an <img> with a redirect to sign-in -- the console holds no
+// cookie there. So the console serves them itself, from STAGING (which also
+// holds uploads not yet published), under a token in the path for the same
+// reason a preview uses one: an <img> request carries no Authorization header.
+//
+// Narrower than a preview token: one site, images only, nothing rendered, and a
+// separate namespace so neither kind of token is accepted in place of the other.
+// Longer-lived, because it is fetched when an editing session opens and every
+// image in that session is loaded through it.
+
+export const MEDIA_VIEW_TTL_SEC = 4 * 60 * 60;
+
+export function issueMediaViewToken({ siteId, email }, secret) {
+  if (!secret) throw new PreviewError("Server misconfigured: no SESSION_SECRET", 500);
+  const x = Math.floor(Date.now() / 1000) + MEDIA_VIEW_TTL_SEC;
+  const body = b64u(JSON.stringify({ s: siteId, e: email, x }));
+  const sig = b64u(createHmac("sha256", secret).update(`media.${body}`).digest());
+  return { token: `${body}.${sig}`, expiresAt: x * 1000 };
+}
+
+export function verifyMediaViewToken(token, secret) {
+  if (!secret) throw new PreviewError("Server misconfigured: no SESSION_SECRET", 500);
+  const raw = String(token ?? "");
+  const dot = raw.lastIndexOf(".");
+  if (dot === -1) throw new PreviewError("Malformed media token", 400);
+  const body = raw.slice(0, dot);
+  const given = unb64u(raw.slice(dot + 1));
+  const expected = createHmac("sha256", secret).update(`media.${body}`).digest();
+  if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
+    throw new PreviewError("Media link is not valid");
+  }
+  let payload;
+  try {
+    payload = JSON.parse(unb64u(body).toString("utf8"));
+  } catch {
+    throw new PreviewError("Unreadable media token", 400);
+  }
+  if (!payload.x || payload.x * 1000 < Date.now()) throw new PreviewError("This media link has expired", 410);
+  return { siteId: payload.s, email: payload.e, expiresAt: payload.x * 1000 };
+}
+
+const IMAGE_TYPES = {
+  webp: "image/webp", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png",
+  gif: "image/gif", avif: "image/avif", svg: "image/svg+xml",
+};
+const VIEWABLE = /\.(webp|jpe?g|png|gif|avif|svg)$/i;
+
+/** The content type of a name mediaViewKey accepted. */
+export const imageType = (name) => IMAGE_TYPES[name.slice(name.lastIndexOf(".") + 1).toLowerCase()];
+
+/** The staged key an image request names, or a 404 for anything that is not an image. */
+export function mediaViewKey(segments) {
+  const parts = segments.map((s) => decodeURIComponent(s));
+  const rel = parts.join("/");
+  if (!parts.length || parts.some((p) => !p || p === "." || p === ".." || p.includes("\\"))
+    || rel.startsWith("_internal/") || !VIEWABLE.test(rel)) {
+    throw new PreviewError("Not an image", 404);
+  }
+  return rel;
+}

@@ -129,3 +129,25 @@ test("a preview is never indexed, shared-cached or framed off-origin", () => {
   assert.match(PREVIEW_HEADERS["content-security-policy"], /frame-ancestors 'self'/);
   assert.equal(PREVIEW_HEADERS["x-content-type-options"], "nosniff");
 });
+
+// ---------------------------------------------------------------- media view
+test("a media-view token round-trips and is not a preview token", async () => {
+  const { issueMediaViewToken, verifyMediaViewToken, verifyPreviewToken } = await import("../admin/lib/preview.mjs");
+  const { token } = issueMediaViewToken({ siteId: "stuck", email: "a@b.c" }, "s3cret");
+  const claims = verifyMediaViewToken(token, "s3cret");
+  assert.equal(claims.siteId, "stuck");
+  assert.equal(claims.email, "a@b.c");
+  assert.throws(() => verifyMediaViewToken(token, "other"), /not valid/);
+  assert.throws(() => verifyPreviewToken(token, "s3cret"), /not valid/);
+});
+
+test("the media view serves staged images and nothing else", async () => {
+  const { mediaViewKey, imageType } = await import("../admin/lib/preview.mjs");
+  assert.equal(mediaViewKey(["articleimages", "x.webp"]), "articleimages/x.webp");
+  assert.equal(mediaViewKey(["media", "1-a%20b.JPG"]), "media/1-a b.JPG");
+  assert.equal(imageType("media/1-a b.JPG"), "image/jpeg");
+  for (const bad of [[], ["index.html"], ["_internal", "articles", "x.webp"], ["..", "other", "x.png"],
+    ["a", "", "x.png"], ["a%5C..%5Cx.png"]]) {
+    assert.throws(() => mediaViewKey(bad), /Not an image/, JSON.stringify(bad));
+  }
+});

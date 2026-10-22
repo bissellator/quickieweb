@@ -71,6 +71,8 @@ const step = (n, s) => console.log(`\n[${n}] ${s}`);
 //   accounts.google.com    the GIS client script, its styles, its connections
 //   'unsafe-inline' style  CKEditor sets element styles at runtime
 //   googleusercontent.com  the signed-in user's avatar
+//   img-src https: blob:   the editor shows body images from the site's own
+//                          host (any custom domain) and fresh uploads as blobs
 //   data: fonts/images     the generated favicon, and CKEditor's inline icons
 //   login.microsoftonline.com   Microsoft sign-in redeems its code here
 //                          (admin/ui/ms-signin.js); the authorize step is a
@@ -79,7 +81,7 @@ const CSP = [
   "default-src 'self'",
   "script-src 'self' https://accounts.google.com",
   "style-src 'self' 'unsafe-inline' https://accounts.google.com",
-  "img-src 'self' data: https://*.googleusercontent.com https://accounts.google.com",
+  "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
   "connect-src 'self' https://accounts.google.com https://login.microsoftonline.com",
   // Kept for browsers that have not moved One Tap to FedCM. With

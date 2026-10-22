@@ -256,6 +256,8 @@ export const summarizeContent = (a) => ({
   slug: a.slug, type: a.type, status: a.status,
   title: a.title, dek: a.dek, date: a.date ?? "",
   category: a.category, categoryLabel: a.categoryLabel,
+  // The editor's tag picker offers every tag in use, gathered from this list.
+  tags: a.tags ?? [],
   nav: a.nav ?? null, updatedAt: a.updatedAt,
 });
 

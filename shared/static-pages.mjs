@@ -257,11 +257,24 @@ export async function removeStaticPage(store, rawPath) {
  *
  * A server-side copy, not a read and a write: the bytes never pass through the
  * Lambda, so a font or an image arrives exactly as uploaded.
+ *
+ * Only what differs is copied. Every publish starts with a rebuild, and copying
+ * all of a site's static files one by one (~85ms each) made publishing a site of
+ * a few hundred of them take most of a minute when two had changed. A staged copy
+ * whose ETag matches its source already holds the same bytes; one the render just
+ * overwrote does not match, so it is copied back and the static file still wins.
+ * `each` runs the copies (the console passes its S3 pool); one at a time if not.
+ * `etags` is the caller's own key -> ETag map of staging, current as of now, when
+ * it already holds one (a rebuild lists staging once and keeps it in step with
+ * what it writes); without it staging is listed here.
  */
-export async function stageStaticPages(store) {
+export async function stageStaticPages(store, each = async (items, fn) => { for (const i of items) await fn(i); }, etags = null) {
   const pages = await listStaticPages(store);
-  for (const { path } of pages) {
-    await store.copyWithinStaging(`${STATIC_PREFIX}${path}`, path);
-  }
+  etags ??= new Map((await store.list("")).map((o) => [o.key, o.etag]));
+  const stale = pages.filter(({ path }) => {
+    const source = etags.get(`${STATIC_PREFIX}${path}`);
+    return !source || etags.get(path) !== source;
+  });
+  await each(stale, ({ path }) => store.copyWithinStaging(`${STATIC_PREFIX}${path}`, path));
   return pages.map((p) => p.path);
 }

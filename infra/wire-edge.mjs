@@ -86,11 +86,13 @@ const SITE_CSP = [
 //   accounts.google.com  GIS client script, its injected stylesheet, its iframe
 //   'unsafe-inline' style  CKEditor injects element styles at runtime
 //   googleusercontent.com  the signed-in user's avatar
+//   img-src https: blob:   the editor shows body images from the site's own
+//                          host (any custom domain) and fresh uploads as blobs
 const ADMIN_CSP = [
   "default-src 'self'",
   "script-src 'self' https://accounts.google.com",
   "style-src 'self' 'unsafe-inline' https://accounts.google.com",
-  "img-src 'self' data: https://*.googleusercontent.com https://accounts.google.com",
+  "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
   "connect-src 'self' https://accounts.google.com",
   "frame-src https://accounts.google.com",

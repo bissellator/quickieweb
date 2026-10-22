@@ -118,6 +118,18 @@
         <label>Category<select id="f-category"></select></label>
       </div>
 
+      <!-- Any number of tags. Each one gets a tag page and a button under the
+           post. The list is every tag already used on the site; a new one is
+           added here and joins the list once saved. -->
+      <div id="tagsField">
+        <span class="lbl">Tags</span>
+        <div class="tagpicks" id="f-tags"></div>
+        <span class="tagadd">
+          <input id="f-newtag" placeholder="New tag" spellcheck="false">
+          <button class="btn small" id="addTag" type="button">Add</button>
+        </span>
+      </div>
+
       <!-- Pages only. A page can put itself in the masthead without anyone
            editing the site config, which is what makes "add an About page" one
            step instead of two. -->

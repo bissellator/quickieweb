@@ -16,7 +16,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { timingSafeEqual } from "node:crypto";
+import { timingSafeEqual, createHash } from "node:crypto";
 import sharp from "sharp";
 
 import {
@@ -27,7 +27,7 @@ import { storeFor, s3, PLATFORM_BUCKET } from "./lib/store.mjs";
 import * as registry from "./lib/registry.mjs";
 import {
   hostToSiteId, checkSiteId, newSiteRecord, normalizeMembers,
-  validateMemberChange, canAdminister, canEdit, roleInSite, SITE_ROLES,
+  validateMemberChange, canAdminister, canEdit, roleInSite, SITE_ROLES, hostForSite,
   ACCESS_LEVELS, levelForRole,
 } from "../shared/site.mjs";
 import { desiredEdgeState, planEdgeSync } from "../shared/access-plan.mjs";
@@ -53,11 +53,13 @@ import {
   stageStaticPages, StaticPageRejected, GENERATED_LIST_KEY,
 } from "../shared/static-pages.mjs";
 import { renderSite, contentType } from "../shared/render.mjs";
+import { RENDER_STAMP_KEY, renderStamp, staleReason } from "./lib/render-stamp.mjs";
 import { normalizeContent, validateContent, summarizeContent, compareSummaries } from "../shared/content.mjs";
 import { tokenForm } from "../shared/template/tokens.mjs";
 import {
   issuePreviewToken, verifyPreviewToken, previewFile, cachedFiles, cacheFiles,
   PREVIEW_HEADERS, PREVIEW_TTL_SEC, PreviewError,
+  issueMediaViewToken, verifyMediaViewToken, mediaViewKey, imageType,
 } from "./lib/preview.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -326,12 +328,41 @@ async function inPool(items, fn) {
   return out;
 }
 
-async function allArticles(store) {
+// Parsed records, kept across invocations of a warm Lambda and keyed by ETag,
+// so a rebuild that already holds a listing of staging re-reads only the records
+// that changed -- usually the one just saved -- instead of every one. An entry is
+// only ever used when its ETag matches the listing's, so it cannot serve stale.
+const recordCache = new Map();
+const RECORD_CACHE_MAX = 20000;
+
+/**
+ * Every record, in index order. With `etags` (a listing of staging), a record
+ * whose ETag is cached is not fetched again, and one the listing does not have
+ * is treated as gone.
+ */
+async function allArticles(store, etags = null, cacheScope = "") {
   const index = await store.getJson(INDEX_KEY, []);
-  const found = await inPool(index, (slug) => store.getJson(articleKey(slug), null));
+  const found = await inPool(index, async (slug) => {
+    const key = articleKey(slug);
+    if (!etags) return store.getJson(key, null);
+    const etag = etags.get(key);
+    if (!etag) return null;
+    const ck = `${cacheScope}/${key}`;
+    const hit = recordCache.get(ck);
+    if (hit?.etag === etag) return structuredClone(hit.record);
+    const record = await store.getJson(key, null);
+    if (record) {
+      if (recordCache.size >= RECORD_CACHE_MAX) recordCache.delete(recordCache.keys().next().value);
+      recordCache.set(ck, { etag, record: structuredClone(record) });
+    }
+    return record;
+  });
   // Index order, and an index entry whose record is gone is skipped -- as before.
   return found.filter(Boolean);
 }
+
+/** The ETag S3 gives a single-part upload under SSE-S3: the body's MD5. */
+const md5 = (body) => createHash("md5").update(typeof body === "string" ? Buffer.from(body, "utf8") : body).digest("hex");
 
 /**
  * The content list from summary.json. Every save rebuilds, and the rebuild
@@ -343,7 +374,9 @@ async function allArticles(store) {
 async function listSummaries(store) {
   const [index, summary] = await Promise.all([store.getJson(INDEX_KEY, []), store.getJson(SUMMARY_KEY, null)]);
   const inStep = summary && typeof summary === "object" && !Array.isArray(summary) &&
-    index.length === Object.keys(summary).length && index.every((s) => Object.hasOwn(summary, s));
+    index.length === Object.keys(summary).length && index.every((s) => Object.hasOwn(summary, s))
+    // Summaries written before they carried tags are rebuilt once, here.
+    && index.every((s) => Array.isArray(summary[s]?.tags));
   if (inStep) return index.map((s) => summary[s]);
   const records = (await allArticles(store)).map((a) => normalizeContent(a));
   await writeSummaries(store, records);
@@ -374,7 +407,11 @@ const templateRefFor = (site, over = {}) => ({
 async function rebuild(ctx) {
   const { site, store } = ctx;
   const template = await loadTemplate(s3, templateRefFor(site), store);
-  const records = (await allArticles(store)).map((a) => normalizeContent(a));
+  // One listing of staging serves the whole rebuild: which records changed,
+  // which rendered files are already there byte for byte, and (kept in step with
+  // what is written below) the static files' check at the end.
+  const etags = new Map((await store.list("")).map((o) => [o.key, o.etag]));
+  const records = (await allArticles(store, etags, site.siteId)).map((a) => normalizeContent(a));
 
   const { files, warnings } = renderSite({
     template, site: site.site, theme: site.theme, records, access: site.access.default,
@@ -395,16 +432,25 @@ async function rebuild(ctx) {
   // contentType() is the renderer's own table. A local copy here once lacked .js
   // and .svg, so search.js and gallery.js were stored as text/html -- which
   // `nosniff` makes the browser refuse to execute.
-  await inPool(Object.entries(files), ([name, body]) => store.putText(name, body, contentType(name)));
+  //
+  // Only what differs is written. A save re-renders the whole site, but one
+  // edited post changes a handful of files -- itself, its neighbours' prev/next
+  // links, the listings, its tag pages -- and rewriting the other few hundred
+  // identical ones was most of what made saving slow. Same bytes, same key,
+  // same content type; nothing a reader sees depends on the skipped writes.
+  const changed = Object.entries(files).filter(([name, body]) => etags.get(name) !== md5(body));
+  await inPool(changed, async ([name, body]) => {
+    await store.putText(name, body, contentType(name));
+    etags.set(name, md5(body));
+  });
 
   // The template's own assets are copied server-side from the platform bucket
   // into this site's staging bucket, so the bytes never pass through here and a
   // site keeps working if the library later drops that version.
   const assets = assetKeysFor(template);
-  for (const { source, target, scope } of assets) {
-    if (scope === "site") await store.copyWithinStaging(source, target);
-    else await store.copyFromPlatform(source, target);
-  }
+  await inPool(assets, ({ source, target, scope }) => (scope === "site"
+    ? store.copyWithinStaging(source, target)
+    : store.copyFromPlatform(source, target)));
 
   // What this rebuild wrote for itself, so the static-file listing can say
   // exactly which uploads replace the template's own files.
@@ -414,7 +460,14 @@ async function rebuild(ctx) {
   // Hand-authored files go back LAST, from their source under _internal/. Last
   // is the rule: a static index.html or assets/style.css replaces the one just
   // rendered or copied (shared/static-pages.mjs, "STATIC FILES WIN").
-  const staticPaths = await stageStaticPages(store);
+  // Template assets were copied over whatever stood there, so their ETags in
+  // the map are unknown now; dropping them makes a static file of the same name
+  // be copied back, as it always was.
+  for (const { target } of assets) etags.delete(target);
+  const staticPaths = await stageStaticPages(store, inPool, etags);
+
+  // Written last, so a rebuild that fails part way leaves staging marked stale.
+  await store.putJson(RENDER_STAMP_KEY, renderStamp(site, template));
 
   return [...new Set([...generated, ...staticPaths])];
 }
@@ -528,6 +581,34 @@ async function servePreview(segments) {
   };
 }
 
+/**
+ * Serve one staged image to the editor (lib/preview.mjs, "media view").
+ * Membership is re-checked on every fetch, as a preview's is.
+ */
+async function serveMediaView(segments) {
+  const [token, ...rest] = segments;
+  const claims = verifyMediaViewToken(token, SESSION_SECRET);
+  const site = await registry.getSite(s3, claims.siteId);
+  if (!site) throw new PreviewError("That site no longer exists", 404);
+  if (!canEdit(roleInSite(claims.email, site))) {
+    const user = await registry.getUser(s3, claims.email);
+    if (!registry.isStaff(user)) throw new PreviewError("You no longer have access to that site", 403);
+  }
+  const name = mediaViewKey(rest);
+  const body = await storeFor(site).getBuffer(name);
+  if (body === null) throw new PreviewError("No such image", 404);
+  return {
+    status: 200,
+    headers: {
+      ...PREVIEW_HEADERS,
+      "content-type": imageType(name),
+      // An SVG opened directly must not run anything it carries.
+      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    },
+    body,
+  };
+}
+
 // -------------------------------------------------------------------- router
 async function routeApi({ method, segments, query, headers, body }) {
   const [head, second] = segments;
@@ -563,6 +644,11 @@ async function routeApi({ method, segments, query, headers, body }) {
   // the HTML is an unstyled skeleton, which is not a preview of anything.
   if (head === "preview" && method === "GET" && second) {
     return await servePreview(segments.slice(1));
+  }
+
+  // ---- editor images: /api/view/<token>/<path>, credential in the path
+  if (head === "view" && method === "GET" && second) {
+    return await serveMediaView(segments.slice(1));
   }
 
   const asJson = () => {
@@ -1023,8 +1109,13 @@ async function routeApi({ method, segments, query, headers, body }) {
       });
     }
     const grant = signGrant({ siteId, level, secret: await accessSecret() });
+    // The session is minted where the gate is: the hosted distribution's own
+    // <site>.<hosted domain>, never baseUrl. A site's baseUrl can be a custom
+    // domain served by a mirror, which has no gate and no /__qw/session, and
+    // sending a reader there would leave the hosted address unreadable to them.
+    const gateOrigin = HOSTED_DOMAIN ? `https://${hostForSite(siteId, HOSTED_DOMAIN)}` : site.site.baseUrl;
     return json(200, {
-      redirect: `${site.site.baseUrl}/__qw/session?g=${encodeURIComponent(grant)}&next=${encodeURIComponent(safeNext(b.next))}`,
+      redirect: `${gateOrigin}/__qw/session?g=${encodeURIComponent(grant)}&next=${encodeURIComponent(safeNext(b.next))}`,
       level,
       email: actor.email,
     });
@@ -1493,9 +1584,23 @@ async function routeApi({ method, segments, query, headers, body }) {
     }
   }
 
+  // ---- a media-view link for the editor (lib/preview.mjs)
+  if (head === "view-token" && method === "POST") {
+    const { token, expiresAt } = issueMediaViewToken({ siteId: site.siteId, email: actor.email }, SESSION_SECRET);
+    return json(201, { base: `/api/view/${token}`, expiresAt });
+  }
+
   // ---- publish
   if (head === "publish") {
-    if (method === "GET") return json(200, await store.computeChangeset());
+    if (method === "GET") {
+      // A changeset against a stale staging says "up to date" while a publish
+      // would re-render everything. Rebuild first, and say why, so the list
+      // shown is the list a publish would push.
+      const template = await loadTemplate(s3, templateRefFor(site), store);
+      const rebuilt = staleReason(await store.getJson(RENDER_STAMP_KEY, null), renderStamp(site, template));
+      if (rebuilt) await rebuild(ctx);
+      return json(200, { ...(await store.computeChangeset()), rebuilt });
+    }
     if (method === "POST") {
       await rebuild(ctx);
       const logs = [];
@@ -1611,6 +1716,11 @@ export async function handler(event) {
     headers: event.headers ?? {}, body,
   });
 
+  // A Function URL takes binary only as base64; a Buffer handed over as-is would
+  // be serialized as JSON.
+  if (Buffer.isBuffer(res.body)) {
+    return { statusCode: res.status, headers: res.headers, body: res.body.toString("base64"), isBase64Encoded: true };
+  }
   return { statusCode: res.status, headers: res.headers, body: res.body };
 }
 

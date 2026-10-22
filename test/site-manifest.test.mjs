@@ -216,6 +216,9 @@ test("a summary carries the list fields, drafts included, never the body", async
   const s = summarizeContent(draft);
   assert.equal(s.status, "draft");
   assert.equal("body" in s, false);
+  assert.deepEqual(s.tags, []);
+  assert.deepEqual(summarizeContent(normalizeContent({ type: "article", slug: "t", title: "T", tags: ["Wife", "Explicit"] })).tags,
+    ["Wife", "Explicit"]);
   const page = summarizeContent(normalizeContent({ type: "page", slug: "about", title: "About", status: "published" }));
   const list = [page, summarizeContent(RECORDS[2]), s, summarizeContent(RECORDS[0])].sort(compareSummaries);
   assert.deepEqual(list.map((x) => x.slug), ["d", "c", "a", "about"]);

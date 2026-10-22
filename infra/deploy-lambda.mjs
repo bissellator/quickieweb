@@ -196,7 +196,11 @@ const inline = {
       Action: ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"],
       // Plus any custom-domain mirrors (a site's storage.mirrorDistributionIds):
       // each one has to be listed here too, or its publish invalidation is denied.
-      Resource: [...new Set([DIST, config.hosted?.distributionId, ...(config.hosted?.mirrorDistributionIds ?? [])].filter(Boolean))]
+      // infra/wire-mirror.mjs records them as hosted.mirrors; the older flat
+      // hosted.mirrorDistributionIds is still honoured.
+      Resource: [...new Set([DIST, config.hosted?.distributionId,
+        ...(config.hosted?.mirrors ?? []).map((m) => m.distributionId),
+        ...(config.hosted?.mirrorDistributionIds ?? [])].filter(Boolean))]
         .map((d) => `arn:aws:cloudfront::${ACCOUNT}:distribution/${d}`),
     },
     // The edge access store (infra/provision-access.mjs): who may read which

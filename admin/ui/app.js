@@ -54,6 +54,7 @@ let taxonomy = { categories: {} };
 let editing = null;
 let editor = null;   // the CKEditor instance
 let dirty = false;
+let knownTags = [];  // every tag used on the current site, from the article list
 
 // ------------------------------------------------------------------ startup
 async function boot() {
@@ -290,6 +291,7 @@ async function loadArticles() {
   list.innerHTML = "<li class='muted'>loading...</li>";
   try {
     const items = await auth.api("/articles");
+    knownTags = [...new Set(items.flatMap((a) => a.tags ?? []))];
     list.innerHTML = items.length ? "" : "<li class='muted'>Nothing here yet.</li>";
     for (const a of items) {
       const li = document.createElement("li");
@@ -387,6 +389,7 @@ async function ensureEditor() {
       CK.List, CK.Indent, CK.IndentBlock,
       CK.Table, CK.TableToolbar, CK.TableCaption,
       CK.Image, CK.ImageBlock, CK.ImageInline, CK.ImageCaption, CK.ImageStyle, CK.ImageToolbar,
+      CK.ImageUpload, MediaUploadAdapter, PreferPastedImageFiles,
       CK.Autoformat, CK.TextTransformation, CK.PasteFromOffice,
       CK.SourceEditing,
     ].filter(Boolean),
@@ -435,6 +438,17 @@ async function ensureEditor() {
     link: { addTargetToExternalLinks: false, defaultProtocol: "https://" },
   });
 
+  const imageUtils = editor.plugins.get("ImageUtils");
+  editor.conversion.for("editingDowncast").add((dispatcher) => {
+    for (const name of ["imageBlock", "imageInline"]) {
+      dispatcher.on(`attribute:src:${name}`, (evt, data, api) => {
+        if (!data.attributeNewValue) return;
+        const img = imageUtils.findViewImgElement(api.mapper.toViewElement(data.item));
+        if (img) api.writer.setAttribute("src", displaySrc(data.attributeNewValue), img);
+      }, { priority: "low" });
+    }
+  });
+
   editor.model.document.on("change:data", () => {
     markDirty();
     $("wordCount").textContent = `${countWords(editor.getData())} words`;
@@ -453,6 +467,106 @@ async function ensureEditor() {
   return editor;
 }
 
+// Bodies store images root-relative ("/media/x.webp", "/articleimages/x.webp"),
+// which is what the published page needs. The console is on another host, where
+// those paths 404, so the EDITING view resolves them elsewhere; the data the
+// editor saves is untouched. Not against the site's own host: a protected site
+// answers there with a sign-in redirect. The API serves them from staging under
+// a short-lived link (POST /view-token), which also covers unpublished uploads.
+// A fresh upload is shown from the file the browser already has.
+const localImages = new Map();
+let mediaView = null;   // { siteId, base, expiresAt }
+
+async function ensureMediaView() {
+  const siteId = auth.getSite();
+  if (mediaView?.siteId === siteId && mediaView.expiresAt - Date.now() > 30 * 60 * 1000) return;
+  const res = await auth.api("/view-token", { method: "POST" });
+  mediaView = { siteId, base: res.base, expiresAt: res.expiresAt };
+}
+
+function displaySrc(src) {
+  if (!src || !src.startsWith("/") || src.startsWith("//")) return src;
+  if (localImages.has(src)) return localImages.get(src);
+  if (mediaView?.siteId === auth.getSite()) return mediaView.base + src;
+  const base = sites.find((s) => s.siteId === auth.getSite())?.baseUrl;
+  return base ? base.replace(/\/+$/, "") + src : src;
+}
+
+// The Lambda takes 6 MB a request, so a binary body has about 4 MB to work
+// with, and a pasted screenshot or a generated PNG is often bigger. The server
+// cuts every image down to 1400px wide anyway, so an oversized one is scaled to
+// twice that here first; nothing visible is lost.
+const IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+const IMAGE_MAX_WIDTH = 2800;
+
+async function shrinkImage(file) {
+  if (file.size <= IMAGE_MAX_BYTES) return file;
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, IMAGE_MAX_WIDTH / bitmap.width);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.9));
+  if (!blob) throw new Error("this browser could not re-encode the image");
+  if (blob.size > IMAGE_MAX_BYTES) {
+    throw new Error(`the image is still ${Math.round(blob.size / 1048576)} MB after scaling; the limit is 4 MB`);
+  }
+  const stem = (file.name || "pasted").replace(/\.[a-z0-9]+$/i, "");
+  return new File([blob], `${stem}.webp`, { type: "image/webp" });
+}
+
+/** Upload one image to the site's staging media and return its stored URL. */
+async function uploadImage(original) {
+  const file = await shrinkImage(original);
+  const res = await auth.api(`/media?kind=image&filename=${encodeURIComponent(file.name || "pasted")}`, {
+    method: "POST", body: file, headers: { "content-type": file.type || "image/jpeg" },
+  });
+  localImages.set(res.url, URL.createObjectURL(file));
+  return res.url;
+}
+
+// Stories are written by pasting a picture, writing about it, pasting the next.
+// ImageUpload catches pasted and dropped image files (and data:/blob: images in
+// pasted HTML) and hands each to this adapter, which sends it through the same
+// media endpoint as the Insert image button. A failure reaches the editor as a
+// rejected upload, which removes the placeholder and is shown below.
+function MediaUploadAdapter(ed) {
+  ed.plugins.get("FileRepository").createUploadAdapter = (loader) => ({
+    async upload() {
+      const file = await loader.file;
+      try {
+        return { default: await uploadImage(file) };
+      } catch (e) {
+        err($("editErr"), `Image upload failed: ${e.message}`);
+        throw e;
+      }
+    },
+    abort() {},
+  });
+}
+
+// "Copy image" in a browser puts the picture on the clipboard twice: as a file
+// and as <img src="https://their-site/...">. CKEditor prefers the HTML, which
+// would hotlink someone else's server instead of uploading. When the HTML is
+// nothing but images, upload the files instead.
+function PreferPastedImageFiles(ed) {
+  ed.editing.view.document.on("clipboardInput", (evt, data) => {
+    const files = Array.from(data.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    const html = data.dataTransfer.getData("text/html");
+    if (html && new DOMParser().parseFromString(html, "text/html").body.textContent.trim()) return;
+    evt.stop();
+    ed.model.change((writer) => {
+      if (data.targetRanges) {
+        writer.setSelection(data.targetRanges.map((r) => ed.editing.mapper.toModelRange(r)));
+      }
+      ed.execute("uploadImage", { file: files });
+    });
+  }, { priority: "high" });
+}
+
 /** A gallery record as one editable document: prose first, then its pictures. */
 function withImages(a) {
   const body = a?.body ?? "";
@@ -466,6 +580,31 @@ function withImages(a) {
   return body + tags;
 }
 
+// One checkbox per tag: every tag on the site plus any this post carries, in
+// name order, with the post's own already ticked.
+function renderTagPicks(selected) {
+  const box = $("f-tags");
+  const names = [...new Set([...knownTags, ...selected])].sort((x, y) => x.localeCompare(y));
+  box.innerHTML = names.length ? names.map((t) =>
+    `<label><input type="checkbox" value="${esc(t)}"${selected.includes(t) ? " checked" : ""}>${esc(t)}</label>`).join("")
+    : "<span class='muted small'>No tags yet. Add the first one below.</span>";
+}
+const pickedTags = () => [...$("f-tags").querySelectorAll("input:checked")].map((i) => i.value);
+
+$("f-tags").addEventListener("change", markDirty);
+function addTag() {
+  const name = $("f-newtag").value.trim().replace(/\s+/g, " ");
+  if (!name) return;
+  const existing = [...knownTags, ...pickedTags()].find((t) => t.toLowerCase() === name.toLowerCase());
+  renderTagPicks([...new Set([...pickedTags(), existing ?? name])]);
+  $("f-newtag").value = "";
+  markDirty();
+}
+$("addTag").addEventListener("click", addTag);
+$("f-newtag").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") { ev.preventDefault(); addTag(); }
+});
+
 async function openEditor(a) {
   editing = a;
   err($("editErr"), null);
@@ -476,6 +615,7 @@ async function openEditor(a) {
   fillSelect($("f-category"),
     Object.entries(taxonomy.categories ?? {}).map(([k, c]) => [k, c.label]),
     a?.category);
+  renderTagPicks(a?.tags ?? []);
 
   $("f-headline").value = a?.title ?? "";
   $("f-dek").value = a?.dek ?? "";
@@ -501,6 +641,11 @@ async function openEditor(a) {
     : "";
 
   const ed = await ensureEditor();
+  try {
+    await ensureMediaView();
+  } catch (e) {
+    err($("editErr"), `Images in this post may not display: ${e.message}`);
+  }
   // A gallery is stored split -- prose in `body`, pictures in `images` -- but it
   // is AUTHORED as one document. Putting the images back means the editor shows
   // what the page will show, in the order the page will show it, and saving
@@ -529,6 +674,7 @@ function toggleType() {
   show($("navFields"), isPage);
   show($("dateField"), !isPage);
   show($("categoryField"), !isPage);
+  show($("tagsField"), !isPage);
   show($("sourceFields"), !isPage);
   show($("pullField"), !isPage);
 }
@@ -547,11 +693,9 @@ $("f-imagefile").addEventListener("change", async (ev) => {
   const ed = await ensureEditor();
   try {
     $("saveState").textContent = "uploading image...";
-    const res = await auth.api(`/media?kind=image&filename=${encodeURIComponent(file.name)}`, {
-      method: "POST", body: file, headers: { "content-type": file.type || "image/jpeg" },
-    });
+    const url = await uploadImage(file);
     ed.model.change((writer) => {
-      const el = writer.createElement("imageBlock", { src: res.url });
+      const el = writer.createElement("imageBlock", { src: url });
       ed.model.insertContent(el, ed.model.document.selection);
     });
     markDirty();
@@ -617,6 +761,7 @@ $("saveArticle").addEventListener("click", async () => {
     payload.date = $("f-date").value;
     payload.category = $("f-category").value;
     payload.categoryLabel = taxonomy.categories?.[$("f-category").value]?.label ?? "";
+    payload.tags = pickedTags();
     payload.pullQuote = $("f-pull").value.trim();
     payload.source = {
       title: $("f-src-title").value.trim(),
@@ -1228,17 +1373,33 @@ $("applySecurity").addEventListener("click", async () => {
 });
 
 // ------------------------------------------------------------------ publish
+// Rebuilding a large site can outlast CloudFront's wait. The Lambda carries on
+// and stamps staging when it finishes, so asking again shortly gets the list.
+async function fetchChangeset(box) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await auth.api("/publish");
+    } catch (e) {
+      if (![502, 503, 504].includes(e.status) || attempt >= 8) throw e;
+      box.textContent = `Staging is still rebuilding (HTTP ${e.status}); asking again in 15 seconds...`;
+      await new Promise((r) => setTimeout(r, 15000));
+    }
+  }
+}
+
 async function loadChangeset() {
   const box = $("changeset");
-  box.textContent = "checking...";
+  box.textContent = "checking (staging is rebuilt first if it is out of date)...";
   try {
-    const cs = await auth.api("/publish");
+    const cs = await fetchChangeset(box);
     const total = cs.upload.length + cs.delete.length;
-    box.innerHTML = total === 0
+    const note = cs.rebuilt
+      ? `<p class="muted small">Staging was rebuilt before comparing: ${esc(cs.rebuilt)}.</p>` : "";
+    box.innerHTML = note + (total === 0
       ? "<span class='muted'>Live is already up to date with staging.</span>"
       : `<p><strong>${cs.upload.length}</strong> to copy, <strong>${cs.delete.length}</strong> to remove.</p>
          <ul class="small">${[...cs.upload.map((k) => `<li>+ ${esc(k)}</li>`),
-           ...cs.delete.map((k) => `<li>- ${esc(k)}</li>`)].join("")}</ul>`;
+           ...cs.delete.map((k) => `<li>- ${esc(k)}</li>`)].join("")}</ul>`);
   } catch (e) {
     box.innerHTML = `<span class="err">${esc(e.message)}</span>`;
   }
@@ -1345,7 +1506,8 @@ async function loadDesign() {
   $("templateList").innerHTML = '<li class="muted">loading...</li>';
   $("themeForm").innerHTML = "";
 
-  const [catalog, theme] = await Promise.all([auth.api("/templates"), auth.api("/theme")]);
+  // Image tokens preview through the same media link the editor uses.
+  const [catalog, theme] = await Promise.all([auth.api("/templates"), auth.api("/theme"), ensureMediaView()]);
   await loadStaticPages();
   const active = catalog.active ?? {};
 
@@ -1416,7 +1578,7 @@ function renderToken(f) {
       input = `<span class="imagepair">
         <input type="text" id="${id}" data-token="${esc(f.key)}" value="${esc(value)}" placeholder="/media/..." spellcheck="false">
         <button class="btn small" data-upload="${esc(f.key)}">Upload</button>
-        ${value ? `<img class="tok-preview" src="${esc(value)}" alt="">` : ""}
+        ${value ? `<img class="tok-preview" src="${esc(displaySrc(value))}" alt="">` : ""}
       </span>`;
       break;
     default:
