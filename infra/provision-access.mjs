@@ -154,6 +154,14 @@ try {
       { host: `www.${DOMAIN}`, uri: "/x", want: { status: 301 } },
       { host: `app.${DOMAIN}`, uri: "/", want: { uri: "/admin/index.html" } },
       { host: "example.com", uri: "/", want: { status: 404 } },
+      // Platform libraries and comment reads: real runtime, real regexes.
+      { host: DOMAIN, uri: "/__qw/lib/comments.js", want: { uri: "/lib/comments.js" } },
+      { host: DOMAIN, uri: "/__qw/lib/../index.html", want: { status: 404 } },
+      { host: DOMAIN, uri: "/__qw/comments/test-thread/", query: { prefix: { value: "sites/" } },
+        want: { uri: "/", prefix: "sites/www/_comments/test-thread/" } },
+      { host: DOMAIN, uri: "/__qw/comments/test-thread/20261022T153012123Z-k3m9x2p7q4w8-hi.json",
+        want: { uri: "/sites/www/_comments/test-thread/20261022T153012123Z-k3m9x2p7q4w8-hi.json" } },
+      { host: DOMAIN, uri: "/__qw/comments/test-thread/notes.txt", want: { status: 404 } },
       ...(argv.includes("--site") ? [{ host: `${argv[argv.indexOf("--site") + 1]}.${DOMAIN}`, uri: "/", want: null }] : []),
     ];
     let failed = 0;
@@ -162,7 +170,7 @@ try {
       await writeFile(ev, JSON.stringify({
         version: "1.0", context: { eventType: "viewer-request" },
         viewer: { ip: "198.51.100.1" },
-        request: { method: "GET", uri: c.uri, querystring: {}, headers: { host: { value: c.host } }, cookies: {} },
+        request: { method: "GET", uri: c.uri, querystring: c.query ?? {}, headers: { host: { value: c.host } }, cookies: {} },
       }));
       const out = await aws(["cloudfront", "test-function", "--name", FUNCTION, "--if-match", etag,
         "--stage", "DEVELOPMENT", "--event-object", `fileb://${ev}`]);
@@ -173,7 +181,9 @@ try {
         continue;
       }
       const o = JSON.parse(r.FunctionOutput ?? "{}");
-      const got = o.response ? { status: o.response.statusCode, location: o.response.headers?.location?.value } : { uri: o.request?.uri };
+      const got = o.response
+        ? { status: o.response.statusCode, location: o.response.headers?.location?.value }
+        : { uri: o.request?.uri, ...(o.request?.querystring?.prefix ? { prefix: o.request.querystring.prefix.value } : {}) };
       const ok = !c.want || Object.entries(c.want).every(([k, v]) => got[k] === v);
       if (!ok) failed++;
       log(`${ok ? "ok  " : "FAIL"} ${c.host}${c.uri} -> ${JSON.stringify(got)}  (${r.ComputeUtilization}% compute)`);
