@@ -78,7 +78,14 @@ async function aws(args, { absent } = {}) {
 
 const log = (s) => console.log(`    ${s}`);
 const step = (n, s) => console.log(`\n[${n}] ${s}`);
-const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+// AWS hands configs back with its own key order and list order (["HEAD","GET"]),
+// so "is it already in place" compares a canonical form, not raw JSON.
+const canon = (v) => Array.isArray(v)
+  ? v.map(canon).sort((x, y) => (JSON.stringify(x) < JSON.stringify(y) ? -1 : 1))
+  : v && typeof v === "object"
+    ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])]))
+    : v;
+const same = (a, b) => JSON.stringify(canon(a)) === JSON.stringify(canon(b));
 
 console.log(`distribution ${DIST}, bucket ${LIVE}${STATUS_ONLY ? "  (status only)" : ""}`);
 const { Account: ACCOUNT } = await aws(["sts", "get-caller-identity"]);
