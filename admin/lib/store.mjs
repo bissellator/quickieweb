@@ -25,6 +25,7 @@ import { CloudFrontClient, CreateInvalidationCommand } from "@aws-sdk/client-clo
 
 import { keyFor, unkeyFor } from "../../shared/site.mjs";
 import { cacheControlFor, contentTypeFor } from "../../shared/object-policy.mjs";
+import { skippedByPublish } from "./publish-skip.mjs";
 
 // The buckets are not necessarily in the function's region: the function lives
 // in us-east-1 with the rest of the account's Lambdas, the buckets in us-west-2.
@@ -48,11 +49,7 @@ async function streamToBuffer(stream) {
 // pushes static files writes objects exactly as this store does.
 export { cacheControlFor, contentTypeFor };
 
-// Prefixes a publish must never move. `admin/` is the tool that fixes a bad
-// publish, so it must be unreachable by one; `_internal/` is the article store
-// the admin edits from, and deleting it once cost the entire source of truth
-// behind a rendered site.
-const SKIP_PREFIXES = ["admin/", "_internal/", "admins.json", "sitedata.json"];
+// What a publish never moves (admin/, _internal/, comments): admin/lib/publish-skip.mjs.
 
 /**
  * A store bound to one site.
@@ -217,7 +214,7 @@ export function storeFor(site) {
   async function computeChangeset() {
     const [stagingObjs, liveObjs] = await Promise.all([list("", STAGING), list("", LIVE)]);
 
-    const publishable = stagingObjs.filter((o) => !SKIP_PREFIXES.some((p) => o.key.startsWith(p)));
+    const publishable = stagingObjs.filter((o) => !skippedByPublish(o.key));
     const liveMap = new Map(liveObjs.map((o) => [o.key, o]));
     const stagingMap = new Map(publishable.map((o) => [o.key, o]));
 
@@ -225,7 +222,7 @@ export function storeFor(site) {
 
     // Anything live that staging no longer has, except things we never publish.
     const del = liveObjs
-      .filter((o) => !stagingMap.has(o.key) && !SKIP_PREFIXES.some((p) => o.key.startsWith(p)))
+      .filter((o) => !stagingMap.has(o.key) && !skippedByPublish(o.key))
       .map((o) => o.key);
 
     return { upload, delete: del };

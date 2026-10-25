@@ -166,6 +166,13 @@ signed in, members only, or nobody; the default is anyone signed in) and
 **Requires approval**. Approved and rejected comments are handled in the
 same tab. Commenters see their name shown, never their email.
 
+**Signed in to the console is not signed in to comment.** The buttons a
+comment shows (Resolve, Delete) come from the `qw_cmt` hint on the site's own
+host, set by the comment sign-in. The console's **Open site** button runs that
+sign-in for you: it asks `/api/comments/grant` and opens the site in a new tab
+through `/api/comments/session`, so an owner lands on the site with their
+buttons showing.
+
 **No compute on a page view or a comment write.** Reads go through the edge:
 `/__qw/comments/<thread>/` becomes an S3 list of that site's thread, and each
 comment is an immutable object. Writes are a `PUT /__qw/post/<thread>/<name>`

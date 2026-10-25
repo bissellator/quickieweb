@@ -176,6 +176,29 @@ $("siteSelect").addEventListener("change", async (ev) => {
   switchView("articles");
 });
 
+// Open site: the site in a new tab, signed in to comment there. Being signed in
+// here is a session on this host; a site's comments read the qw_cmt hint on the
+// SITE's host to decide which buttons to draw, so an owner who only signed in
+// here saw none. This runs the same grant as the comment sign-in page
+// (POST /api/comments/grant), which sends the tab through the site's
+// /api/comments/session to set the commenter session and its hint, then on to
+// the home page. The tab is opened before the call, so no popup blocker stops it.
+$("openSite").addEventListener("click", async () => {
+  const site = sites.find((s) => s.siteId === auth.getSite());
+  if (!site) return;
+  const tab = window.open("about:blank", "_blank");
+  if (!tab) return err($("globalErr"), "The browser blocked the new tab. Allow pop-ups for this page and try again.");
+  tab.opener = null;
+  try {
+    const res = await auth.api("/comments/grant", { method: "POST", body: JSON.stringify({ site: site.siteId, next: "/" }) });
+    tab.location.replace(res.redirect);
+  } catch (e) {
+    // Comments are off here, or this person may not comment: open the site anyway, and say why.
+    tab.location.replace(site.baseUrl);
+    err($("globalErr"), `Opened ${site.siteId} without signing in to comment: ${e.message}`);
+  }
+});
+
 $("newSite").addEventListener("click", async () => {
   const siteId = prompt(
     "Subdomain for the new site.\n\n" +
