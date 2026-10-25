@@ -168,15 +168,19 @@ same tab. Commenters see their name shown, never their email.
 
 **No compute on a page view or a comment write.** Reads go through the edge:
 `/__qw/comments/<thread>/` becomes an S3 list of that site's thread, and each
-comment is an immutable object. Writes are browser form uploads straight to
-S3, held to a signed POST policy. The policy, not the library, enforces the
-limits: the key prefix, 1-10,240 bytes, `application/json`, and the
-commenter's uid and name. The Lambda issues one such ticket per commenter per
-hour, at `/api/comments/ticket`, after a sign-in through the same
-`access.html` page (`for=comment`).
+comment is an immutable object. Writes are a `PUT /__qw/post/<thread>/<name>`
+to the site's own host, checked by a CloudFront Function
+(`infra/edge/comment-writer.js`) before CloudFront writes them to S3 itself.
+The edge, not the library, enforces the limits: a valid ticket for this site,
+a file name carrying the ticket's own uid, 1-10,240 bytes, and the commenter's
+uid, name and role set from the ticket. It writes with `If-None-Match: *`, and
+the bucket policy refuses a CloudFront write without it, so no comment can be
+written over, by anyone. The Lambda issues one ticket per commenter per hour,
+at `/api/comments/ticket`, after a sign-in through the same `access.html` page
+(`for=comment`).
 
-**Nothing stored is trusted.** Anyone holding a ticket can upload any bytes
-within those limits. Every reader checks every comment before showing it
+**Nothing stored is trusted.** Anyone holding a ticket can write any bytes
+within those limits, as themselves. Every reader checks every comment before showing it
 (`shared/comments.mjs`): key shape, author against S3-pinned metadata, claimed
 time against S3's own clock, JSON, schema, length and characters. Anything that
 fails is reported in `rejected` and not shown.
@@ -188,9 +192,9 @@ by its author. Approving copies it across, stamped with the approval time.
 ### Setting it up (operators, once per installation)
 
 ```bash
-node infra/create-deploy-user.mjs --admin-profile <admin>    # bucket CORS and cache-policy permissions
+node infra/create-deploy-user.mjs --admin-profile <admin>    # cache and origin request policy permissions
 node infra/provision-access.mjs && node infra/provision-access.mjs --publish  # router: /__qw/lib/, /__qw/comments/
-node infra/wire-comments.mjs --status                         # then without --status
+node infra/wire-comments.mjs --status                         # then without --status: writer, behaviors, bucket policy
 node infra/build-lambda.mjs && node infra/deploy-lambda.mjs   # ticket, sign-in and moderation routes
 node infra/deploy-admin-ui.mjs                                # the Comments tab, for=comment sign-in
 node infra/deploy-libs.mjs                                    # /__qw/lib/comments.js

@@ -1,11 +1,11 @@
-// Comment tickets: who may have one, the commenter session, and the S3 POST
-// policy that S3 enforces on every upload.
+// Comment tickets: who may have one, the commenter session, and the signed
+// token the edge checks on every comment write.
 //
 //   node --test test/comment-ticket.test.mjs
 //
-// The policy is the security boundary for writes -- size, type, prefix, author
-// -- so the tests decode it and check every condition, rather than trusting
-// that a signed blob says what it should.
+// The token is the security boundary for writes -- site, author, role, where it
+// lands -- so the tests take it apart and check every field, and
+// test/comment-writer.test.mjs holds the edge to accepting exactly these.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -13,15 +13,13 @@ import { createHash, createHmac } from "node:crypto";
 
 import {
   commenterUid, commentDecision, signCommentGrant, signCommentSession, verifyCommenterToken,
-  signCommentTicket, signingKey, COMMENT_GRANT_SEC, COMMENT_SESSION_SEC, TICKET_SEC,
-  CREDENTIAL_MARGIN_SEC, COMMENT_CACHE_CONTROL,
+  signCommentTicket, encodeTicketName, COMMENT_GRANT_SEC, COMMENT_SESSION_SEC, TICKET_SEC, COMMENT_WRITE_PATH,
 } from "../shared/comment-ticket.mjs";
-import { COMMENT_LIMITS, ticketProblem } from "../shared/comments.mjs";
+import { ticketProblem } from "../shared/comments.mjs";
 import { normalizeSite, normalizeSiteComments } from "../shared/site.mjs";
 
 const SECRET = "test-secret-0123456789abcdef";
 const NOW = Date.UTC(2026, 9, 22, 15, 30, 12, 123);
-const creds = { accessKeyId: "AKIDEXAMPLE", secretAccessKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", sessionToken: "tok/en+=" };
 
 const site = (comments, members = [{ email: "owner@acme.test", role: "owner" }]) =>
   normalizeSite({ siteId: "acme", members, comments });
@@ -90,79 +88,49 @@ test("a tampered, forged, expired or over-long token is refused", () => {
 
 // --------------------------------------------------------------- tickets
 const ticket = (extra = {}) => signCommentTicket({
-  bucket: "quickieweb-sites-live", region: "us-west-2", sitePrefix: "sites/acme", pending: false,
-  uid: "0123456789abcdef", name: "Renée O", credentials: creds, now: NOW, ...extra,
-});
-const policyOf = (t) => JSON.parse(Buffer.from(t.fields.Policy, "base64").toString("utf8"));
-
-test("SigV4 key derivation matches AWS's published example", () => {
-  // From the AWS General Reference, "Examples of how to derive a signing key".
-  assert.equal(signingKey("wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", "20120215", "us-east-1", "iam").toString("hex"),
-    "f4780e2d9f65fa895f9c67b32ce1baf0b0d8a43505a000a1a9e090d414db404d");
+  siteId: "acme", pending: false, uid: "0123456789abcdef", name: "Renée O. Smith", secret: SECRET, now: NOW, ...extra,
 });
 
-test("the policy pins prefix, size, type and author -- every field it carries", () => {
+test("a ticket is eight dot-separated parts, signed over the first seven", () => {
   const t = ticket();
-  const p = policyOf(t);
-  assert.equal(p.expiration, new Date(NOW + TICKET_SEC * 1000).toISOString());
-  assert.deepEqual(p.conditions.slice(0, 3), [
-    { bucket: "quickieweb-sites-live" },
-    ["starts-with", "$key", "sites/acme/_comments/"],
-    ["content-length-range", 1, COMMENT_LIMITS.objectBytes],
-  ]);
-  // Every form field except the policy and signature is an exact-match condition,
-  // so the form cannot differ from what was signed.
-  const pinned = Object.assign({}, ...p.conditions.slice(3));
-  const { Policy, "X-Amz-Signature": sig, ...rest } = t.fields;
-  assert.deepEqual(pinned, rest);
-  assert.equal(pinned["Content-Type"], "application/json");
-  assert.equal(pinned["Cache-Control"], COMMENT_CACHE_CONTROL);
-  assert.equal(pinned["x-amz-meta-uid"], "0123456789abcdef");
-  assert.equal(pinned["x-amz-meta-name"], "Ren%C3%A9e%20O", "metadata travels as a header, so it is ASCII");
-  assert.equal(pinned["x-amz-meta-role"], "none", "pinned even when there is no role, so one cannot be added");
-  assert.equal(policyOf(ticket({ role: "editor" })).conditions.find((c) => "x-amz-meta-role" in c)["x-amz-meta-role"], "editor");
+  const p = t.token.split(".");
+  assert.equal(p.length, 8, "a dot in the name must not add a part");
+  const exp = Math.floor(NOW / 1000) + TICKET_SEC;
+  assert.deepEqual(p.slice(0, 7), ["t1", "acme", String(exp), "0123456789abcdef", "none", "c", "Ren%C3%A9e%20O%2E%20Smith"]);
+  assert.equal(p[7], createHmac("sha256", SECRET).update(p.slice(0, 7).join(".")).digest("hex"));
+  assert.equal(t.expires, new Date(exp * 1000).toISOString());
+  assert.equal(t.url, COMMENT_WRITE_PATH);
+  assert.equal(t.prefix, "_comments/");
+  assert.equal(t.name, "Renée O. Smith");
+  assert.equal(decodeURIComponent(p[6]), "Renée O. Smith", "what the edge stores as x-amz-meta-name decodes to the name");
+});
+
+test("the role and the destination are in the signed part", () => {
+  assert.equal(ticket({ role: "editor" }).token.split(".")[4], "editor");
+  const pending = ticket({ pending: true });
+  assert.equal(pending.token.split(".")[5], "p");
+  assert.equal(pending.prefix, "_pending/");
+  assert.equal(pending.pending, true);
   assert.throws(() => ticket({ role: "staff" }), /not a commenter role/);
-  assert.equal(pinned["X-Amz-Credential"], "AKIDEXAMPLE/20261022/us-west-2/s3/aws4_request");
-  assert.equal(pinned["X-Amz-Date"], "20261022T153012Z");
-  assert.equal(pinned["X-Amz-Security-Token"], "tok/en+=");
 });
 
-test("the signature is SigV4 over the base64 policy", () => {
-  const t = ticket();
-  const want = createHmac("sha256", signingKey(creds.secretAccessKey, "20261022", "us-west-2", "s3"))
-    .update(t.fields.Policy).digest("hex");
-  assert.equal(t.fields["X-Amz-Signature"], want);
-});
-
-test("a ticket never outlives the credentials that signed it", () => {
-  const expiration = new Date(NOW + 20 * 60e3);
-  const t = ticket({ credentials: { ...creds, expiration } });
-  assert.equal(t.expires, new Date(NOW + (20 * 60 - CREDENTIAL_MARGIN_SEC) * 1000).toISOString());
-  assert.equal(policyOf(t).expiration, t.expires);
-  assert.equal(ticket({ credentials: { ...creds, expiration: new Date(NOW + 10 * 3600e3) } }).expires,
-    new Date(NOW + TICKET_SEC * 1000).toISOString(), "long-lived credentials still get the normal hour");
-  assert.throws(() => ticket({ credentials: { ...creds, expiration: new Date(NOW + 60e3) } }), /about to expire/);
-});
-
-test("a site that requires approval gets tickets for _pending/ only", () => {
-  const t = ticket({ pending: true });
-  assert.equal(t.prefix, "sites/acme/_pending/");
-  assert.equal(t.pending, true);
-  assert.deepEqual(policyOf(t).conditions[1], ["starts-with", "$key", "sites/acme/_pending/"]);
+test("a name is shown as given, bounded, and never empty", () => {
+  assert.equal(ticket({ name: "" }).name, "Reader");
+  assert.equal(ticket({ name: "x".repeat(200) }).name.length, 80);
+  assert.equal(encodeTicketName("a.b"), "a%2Eb");
+  assert.match(encodeTicketName("𝔘 'quoted' (x) *!~_-"), /^[A-Za-z0-9%_~!*'()-]+$/, "only what the edge accepts");
 });
 
 test("a ticket is exactly what the browser library accepts", () => {
   assert.equal(ticketProblem(ticket()), null);
   assert.equal(ticketProblem(ticket({ pending: true })), null);
-  const noToken = ticket({ credentials: { ...creds, sessionToken: undefined } });
-  assert.equal(noToken.fields["X-Amz-Security-Token"], undefined);
-  assert.equal(ticketProblem(noToken), null);
+  assert.match(ticketProblem({ ...ticket(), url: "https://evil.test/" }), /write path/);
+  assert.match(ticketProblem({ ...ticket(), token: undefined }), /token/);
 });
 
 test("a ticket is never signed for something it should not cover", () => {
-  assert.throws(() => ticket({ sitePrefix: "sites/*" }), /site prefix/);
-  assert.throws(() => ticket({ sitePrefix: "sites/acme/../beta" }), /site prefix/);
+  assert.throws(() => ticket({ siteId: "../beta" }), /site id/);
+  assert.throws(() => ticket({ siteId: "a.b" }), /site id/, "a dot would shift every part after it");
   assert.throws(() => ticket({ uid: "../x" }), /uid/);
-  assert.throws(() => ticket({ bucket: "Bad Bucket" }), /bucket/);
-  assert.throws(() => ticket({ credentials: {} }), /credentials/);
+  assert.throws(() => ticket({ secret: "" }), /secret/);
 });

@@ -257,9 +257,9 @@ test("only the author can retract, and an event needs a comment before it", () =
 // ----------------------------------------------------------------- tickets
 const NOW = new Date(T0).toISOString();
 const goodTicket = (extra = {}) => ({
-  url: "https://quickieweb-sites-live.s3.us-west-2.amazonaws.com/",
-  fields: { "Content-Type": "application/json", "x-amz-meta-uid": UID, "x-amz-meta-name": "Sam", Policy: "p", "X-Amz-Signature": "s" },
-  prefix: "sites/www/_comments/",
+  url: "/__qw/post/",
+  token: `t1.www.1792700000.${UID}.none.c.Sam.0123abcd`,
+  prefix: "_comments/",
   pending: false,
   uid: UID,
   name: "Sam",
@@ -270,8 +270,10 @@ const goodTicket = (extra = {}) => ({
 
 test("a ticket is checked before a browser will upload with it", () => {
   assert.equal(ticketProblem(goodTicket()), null);
-  assert.match(ticketProblem(goodTicket({ url: "http://x/" })), /https/);
-  assert.match(ticketProblem(goodTicket({ prefix: "sites/www/_comments" })), /prefix/);
+  assert.match(ticketProblem(goodTicket({ url: "https://quickieweb-sites-live.s3.us-west-2.amazonaws.com/" })), /write path/,
+    "a ticket never sends a comment anywhere but this site");
+  assert.match(ticketProblem(goodTicket({ token: "AKID..." })), /token/);
+  assert.match(ticketProblem(goodTicket({ prefix: "_comments" })), /prefix/);
   assert.match(ticketProblem(goodTicket({ uid: "A" })), /uid/);
   assert.match(ticketProblem(goodTicket({ expires: "soon" })), /times/);
   assert.match(ticketProblem(goodTicket({ pending: undefined })), /pending/);
@@ -290,7 +292,6 @@ function boot({ host = "quickieweb.com", path = "/my-article.html", routes, cloc
       origin: `https://${host}`, hostname: host, pathname: path, search: "?ref=x",
       assign: (u) => assigned.push(u),
     },
-    FormData, Blob,
     fetch: async (url, init = {}) => {
       calls.push({ url, init });
       const route = routes(url, init);
@@ -418,50 +419,53 @@ test("an invalid comment is refused before any network call", async () => {
   assert.equal(calls.length, 0);
 });
 
-test("a post is a form upload to S3, with the ticket's fields, a server-clock key, and the file last", async () => {
-  let form;
+test("a post is a PUT to this site's write path, with the ticket, a server-clock name and the comment as JSON", async () => {
+  let put;
   // The browser's clock is 2 minutes slow; the ticket's `now` corrects it.
   const skewed = T0 - 120e3;
   const { Q } = boot({
     clock: skewed,
     routes: (url, init) => {
       if (url === "https://quickieweb.com/api/comments/ticket?site=www") return Response.json(goodTicket());
-      if (init.method === "POST") { form = init.body; return new Response(null, { status: 204 }); }
+      if (init.method === "PUT") { put = { url, init }; return new Response(null, { status: 200 }); }
       return null;
     },
   });
   const c = Q.connect();
   const res = await at(skewed, () => c.post({ subject: "Great post", body: "Loved it." }));
   assert.equal(res.name, "20261022T153012123Z-k3m9x2p7q4w8-great-post.json");
-  assert.equal(res.key, "sites/www/_comments/my-article/" + res.name);
+  assert.equal(res.key, "_comments/my-article/" + res.name);
   assert.equal(res.pending, false);
 
-  const fields = [...form.keys()];
-  assert.equal(fields.at(-1), "file", "S3 ignores fields after the file");
-  assert.equal(form.get("x-amz-meta-uid"), UID);
-  assert.equal(form.get("key"), res.key);
-  assert.deepEqual(JSON.parse(await form.get("file").text()),
+  assert.equal(put.url, "https://quickieweb.com/__qw/post/my-article/" + res.name, "same origin: no CORS, no bucket URL");
+  assert.deepEqual(put.init.headers, { "content-type": "application/json", "x-qw-ticket": goodTicket().token });
+  assert.equal(put.init.credentials, "same-origin");
+  assert.deepEqual(JSON.parse(put.init.body),
     { v: 1, kind: "comment", thread: "my-article", body: "Loved it.", subject: "Great post" });
 });
 
-test("S3 refusing an upload is an error with its reason, and drops the ticket", async () => {
+test("a refused write is an error with its reason; a refused ticket is dropped", async () => {
   let tickets = 0;
   const { Q } = boot({
     routes: (url, init) => {
       if (url.includes("/api/comments/ticket")) { tickets++; return Response.json(goodTicket()); }
-      if (init.method === "POST") {
-        return new Response("<Error><Code>EntityTooLarge</Code><Message>Your proposed upload exceeds the maximum allowed size</Message></Error>",
-          { status: 400 });
+      if (init.method === "PUT" && JSON.parse(init.body).body === "taken") {
+        return new Response("<Error><Code>PreconditionFailed</Code><Message>At least one of the pre-conditions you specified did not hold</Message></Error>",
+          { status: 412 });
       }
+      if (init.method === "PUT") return Response.json({ error: "The comment ticket is missing, expired or not for this site" }, { status: 403 });
       return null;
     },
   });
   const c = Q.connect();
-  await at(T0, () => assert.rejects(c.post({ body: "x" }),
-    (e) => e.code === "upload" && e.s3Code === "EntityTooLarge" && /exceeds the maximum/.test(e.message)));
+  await at(T0, () => assert.rejects(c.post({ body: "taken" }),
+    (e) => e.code === "upload" && e.status === 412 && e.s3Code === "PreconditionFailed" && /pre-conditions/.test(e.message)));
+  assert.equal(tickets, 1, "S3's refusal keeps the ticket");
+  await at(T0, () => assert.rejects(c.post({ body: "y" }),
+    (e) => e.code === "upload" && e.status === 403 && /ticket is missing, expired/.test(e.message)));
   assert.equal(tickets, 1);
-  await at(T0, () => assert.rejects(c.post({ body: "y" }), (e) => e.code === "upload"));
-  assert.equal(tickets, 1, "a 400 keeps the ticket");
+  await at(T0, () => assert.rejects(c.post({ body: "z" }), (e) => e.status === 403));
+  assert.equal(tickets, 2, "the edge's 403 drops the ticket, so the next post fetches a fresh one");
 });
 
 test("resolve, reopen and retract are events that name their comment", async () => {
@@ -469,15 +473,15 @@ test("resolve, reopen and retract are events that name their comment", async () 
   const { Q } = boot({
     routes: (url, init) => {
       if (url.includes("/api/comments/ticket")) return Response.json(goodTicket());
-      if (init.method === "POST") { posted.push(init.body); return new Response(null, { status: 204 }); }
+      if (init.method === "PUT") { posted.push({ url, body: init.body }); return new Response(null, { status: 200 }); }
       return null;
     },
   });
   const c = Q.connect();
   const ref = buildEntryName(T0 - 5000, OTHER, "theirs");
   await at(T0, () => c.resolve(ref));
-  assert.deepEqual(JSON.parse(await posted[0].get("file").text()), { v: 1, kind: "resolve", thread: "my-article", ref });
-  assert.match(posted[0].get("key"), /-resolve\.json$/);
+  assert.deepEqual(JSON.parse(posted[0].body), { v: 1, kind: "resolve", thread: "my-article", ref });
+  assert.match(posted[0].url, /-resolve\.json$/);
   await assert.rejects(c.retract("not-a-name"), (e) => e.code === "invalid");
 });
 

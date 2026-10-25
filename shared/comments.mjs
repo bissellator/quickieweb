@@ -15,15 +15,19 @@
 //                                                 S3 ListObjectsV2 on the site's
 //                                                 own _comments/<thread>/ prefix
 //   read    GET /__qw/comments/<thread>/<name>    one object, immutable
-//   write   POST straight to S3                   a browser form upload, held to
-//                                                 a policy S3 itself enforces
+//   write   PUT /__qw/post/<thread>/<name>        a CloudFront Function checks
+//                                                 the ticket, then CloudFront
+//                                                 writes it to S3 itself
 //
 // The only Lambda involved is the one that already signs readers in: it issues
-// the upload "ticket" (an S3 POST policy) once per session, at
-// GET /api/comments/ticket. The policy pins the content type, the size range,
-// the key prefix and the x-amz-meta-uid / x-amz-meta-name of the person it was
-// issued to, and S3 refuses any upload that breaks it. That is what stops a
-// multi-gigabyte video: not this file, which an attacker never has to run.
+// the upload "ticket" (a signed token) once an hour per commenter, at
+// GET /api/comments/ticket. The edge (infra/edge/comment-writer.js) refuses a
+// write unless the ticket is valid for this site, the uid in the name is the
+// ticket's, and the size is within the limit; it sets the author metadata, type
+// and cache policy from the ticket; and it writes with If-None-Match: *, so S3
+// refuses to replace any comment that exists. That is what stops a
+// multi-gigabyte video, or someone writing over somebody else's comment: not
+// this file, which an attacker never has to run.
 //
 // WHAT AN ATTACKER CAN STILL DO, AND WHY IT DOES NOT REACH A READER
 //
@@ -363,8 +367,8 @@ function commentError(code, message, extra) {
 /** What a ticket must look like before a browser will use it. */
 function ticketProblem(t) {
   if (!t || typeof t !== "object") return "not an object";
-  if (typeof t.url !== "string" || t.url.indexOf("https://") !== 0) return "url is not https";
-  if (!t.fields || typeof t.fields !== "object") return "no form fields";
+  if (t.url !== "/__qw/post/") return "url is not this site's write path";
+  if (typeof t.token !== "string" || t.token.indexOf("t1.") !== 0) return "no token";
   if (typeof t.prefix !== "string" || !/^[a-z0-9\/_-]+\/$/.test(t.prefix)) return "prefix is not valid";
   if (typeof t.uid !== "string" || !/^[a-z0-9]{8,32}$/.test(t.uid)) return "uid is not valid";
   if (isNaN(Date.parse(t.expires)) || isNaN(Date.parse(t.now))) return "expires and now must be times";
@@ -405,7 +409,7 @@ function readHint(cookies) {
 
 /**
  * The client. `env` is everything it touches outside itself -- fetch, location,
- * FormData, Blob, a clock and the hosted apex -- so Node can drive it with
+ * a clock and the hosted apex -- so Node can drive it with
  * fakes and a browser hands it window's.
  */
 function createClient(env, opts) {
@@ -516,18 +520,21 @@ function createClient(env, opts) {
     var t = await session();
     if (!t) throw commentError("signin", "Sign in to comment.", { signInUrl: signInUrl() });
     var name = buildEntryName(env.now() + offset, t.uid, slug);
-    var form = new env.FormData();
-    Object.keys(t.fields).forEach(function (k) { form.append(k, t.fields[k]); });
-    form.append("key", t.prefix + thread + "/" + name);
-    // S3 reads every field before the file and ignores anything after it.
-    form.append("file", new env.Blob([JSON.stringify(obj)], { type: "application/json" }));
-    var res = await env.fetch(t.url, { method: "POST", body: form });
+    var res = await env.fetch(origin + t.url + thread + "/" + name, {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-qw-ticket": t.token },
+      body: JSON.stringify(obj),
+      credentials: "same-origin",
+    });
     if (res.status !== 200 && res.status !== 201 && res.status !== 204) {
-      var xml = await res.text();
-      // A ticket S3 no longer honours is dropped, so the next attempt gets a fresh one.
+      // The edge refuses in JSON; S3 in XML (a 412 for a name that exists).
+      var text = await res.text();
+      var why = xmlTag(text, "Message");
+      if (!why) { try { why = JSON.parse(text).error; } catch (e) { why = ""; } }
+      // A refused ticket is dropped, so the next attempt gets a fresh one.
       if (res.status === 403) ticket = null;
-      throw commentError("upload", "S3 refused the comment: " + (xmlTag(xml, "Message") || "HTTP " + res.status),
-        { status: res.status, s3Code: xmlTag(xml, "Code") });
+      throw commentError("upload", "The comment was refused: " + (why || "HTTP " + res.status),
+        { status: res.status, s3Code: xmlTag(text, "Code") });
     }
     // pending: the site requires approval, so nobody -- the author included --
     // will see this in load() until a site admin approves it. Say so on screen.
@@ -820,8 +827,6 @@ ${PURE.map(String).join("\n\n")}
     return createClient({
       fetch: window.fetch.bind(window),
       location: window.location,
-      FormData: window.FormData,
-      Blob: window.Blob,
       now: function () { return Date.now(); },
       cookie: function () { return document.cookie; },
       apex: APEX,

@@ -35,7 +35,7 @@ import { signGrant } from "../shared/access-token.mjs";
 import { edgeConfigured, requireEdge, accessSecret, applyEdgeOps } from "./lib/access-edge.mjs";
 import {
   commenterFrom, grantRedirect, sessionCookies, hintCookie, CLEAR_SESSION_COOKIES, ticketFor, settingsFrom,
-  listPending, approve, reject, removeComment,
+  listPending, listPublished, approve, reject, removeComment, discard,
 } from "./lib/comments.mjs";
 import { processLogs, readReport, readDay, readDetailWindow } from "./lib/stats.mjs";
 import * as oauthStore from "./lib/oauth-store.mjs";
@@ -686,15 +686,7 @@ async function routeApi({ method, segments, query, headers, body }) {
       const site = await registry.getSite(s3, siteId);
       if (!site) return json(404, { error: "No such site" });
       const commenter = commenterFrom(headers, siteId, secret);
-      const ticket = ticketFor({
-        site,
-        commenter,
-        secret,
-        // The function's own role credentials, from the SDK so their expiry
-        // comes with them: S3 refuses a policy once the credentials that signed
-        // it expire, so the ticket is cut short to match.
-        credentials: await s3.config.credentials(),
-      });
+      const ticket = ticketFor({ site, commenter, secret });
       return { ...json(200, ticket), cookies: [hintCookie(commenter, site)] };
     }
     // Deleting is moderation, so it is the CMS's job and costs a Lambda call;
@@ -1665,6 +1657,20 @@ async function routeApi({ method, segments, query, headers, body }) {
     }
     if (method === "POST" && second === "reject") {
       return json(200, { ...(await reject(ops, asJson().key)), by: actor.email });
+    }
+    if (method === "GET" && second === "published") {
+      return json(200, await listPublished(ops));
+    }
+    if (method === "POST" && second === "remove") {
+      const b = asJson();
+      const done = await removeComment(ops, { thread: b.thread, name: b.name });
+      console.log(`[${site.siteId}] comment ${done.key} deleted by ${actor.email} (+${done.events} events)`);
+      return json(200, { ...done, by: actor.email });
+    }
+    if (method === "POST" && second === "discard") {
+      const done = await discard(ops, asJson().key);
+      console.log(`[${site.siteId}] refused comment object ${done.key} discarded by ${actor.email}`);
+      return json(200, { ...done, by: actor.email });
     }
     return json(405, { error: "Method not allowed" });
   }

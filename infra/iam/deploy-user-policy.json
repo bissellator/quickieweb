@@ -79,6 +79,10 @@
         "cloudfront:GetCachePolicy",
         "cloudfront:UpdateCachePolicy",
         "cloudfront:ListCachePolicies",
+        "cloudfront:CreateOriginRequestPolicy",
+        "cloudfront:GetOriginRequestPolicy",
+        "cloudfront:UpdateOriginRequestPolicy",
+        "cloudfront:ListOriginRequestPolicies",
         "cloudfront:TestFunction"
       ],
       "Resource": "*"

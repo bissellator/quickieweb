@@ -143,8 +143,8 @@ async function handler(event) {
 // Read-only, and after the access check, so a protected site's comments are
 // exactly as readable as the site. The prefix is built HERE from the tenant and
 // a checked thread; nothing the viewer sends reaches S3 except the two paging
-// parameters. Writes never come this way -- they go straight to S3 under a
-// signed POST policy (shared/comment-ticket.mjs).
+// parameters. Writes never come this way -- they are PUTs to /__qw/post/,
+// a behavior of their own (infra/edge/comment-writer.js).
 //
 //   /__qw/comments/<thread>/          ListObjectsV2 of sites/<id>/_comments/<thread>/
 //   /__qw/comments/<thread>/<name>    that one object

@@ -295,6 +295,16 @@
     <h2 class="pendinghead">Waiting for approval</h2>
     <p class="muted small" id="pendingEmpty">Nothing is waiting.</p>
     <ul class="pending" id="pendingList"></ul>
+
+    <h2 class="pendinghead">Published</h2>
+    <p class="muted small" id="publishedStatus"></p>
+    <ul class="pending" id="publishedList"></ul>
+
+    <h2 class="pendinghead" id="refusedHead" hidden>Refused by readers</h2>
+    <p class="muted small" id="refusedNote" hidden>Uploads readers will not show: malformed, or a
+      comment that was overwritten after it was posted. Nobody sees these, but they are worth
+      knowing about.</p>
+    <ul class="pending" id="refusedList" hidden></ul>
   </section>
 
   <!-- design: template choice + the customization form, both generated from

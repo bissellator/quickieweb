@@ -2,25 +2,27 @@
 // tickets, and the console's moderation queue.
 //
 // None of this runs on a page view or a comment write. A reader's browser lists
-// and reads comments through the edge, and uploads them straight to S3; this
+// and reads comments through the edge, and writes them through it too; this
 // module only decides who gets a ticket (once an hour, per commenter) and lets a
 // site admin approve what is waiting.
 //
 //   POST   /api/comments/grant      console host, signed in   -> redirect to the site
 //   GET    /api/comments/session    site host, ?g=<grant>     -> qw_commenter cookie
 //   DELETE /api/comments/session    site host                 -> cookie cleared
-//   GET    /api/comments/ticket     site host, cookie         -> S3 POST policy
+//   GET    /api/comments/ticket     site host, cookie         -> a write ticket for the edge
 //
 //   GET    /api/comments            console, site admin       -> settings + pending
+//   GET    /api/comments/published  console, site admin       -> every published comment
 //   PUT    /api/comments/settings   { who, approval }
 //   POST   /api/comments/approve    { key }   _pending/... -> _comments/...
 //   POST   /api/comments/reject     { key }   deleted
+//   POST   /api/comments/remove     { thread, name }  a published comment, deleted
 //
 // Pure apart from the `ops` it is handed: list/read/copy/remove on the site's
 // LIVE bucket, by site-relative key. server.mjs binds them to the store, and
 // test/comments-api.test.mjs to a Map.
 
-import { COMMENT_LIMITS, parseEntryName, validThread, checkObject, buildEntryName } from "../../shared/comments.mjs";
+import { COMMENT_LIMITS, parseEntryName, validThread, checkObject, buildEntryName, foldThread } from "../../shared/comments.mjs";
 import {
   commentDecision, commenterUid, signCommentGrant, signCommentSession, verifyCommenterToken,
   signCommentTicket, COMMENTER_COOKIE, COMMENT_GRANT_SEC, COMMENT_SESSION_SEC,
@@ -113,20 +115,19 @@ export const CLEAR_SESSION_COOKIES = [
  * decide, every time: a session proves who someone is, not that they may still
  * comment.
  */
-export function ticketFor({ site, commenter, secret, credentials, now = Date.now() }) {
+export function ticketFor({ site, commenter, secret, now = Date.now() }) {
   const d = commentDecision(site, commenter?.email ?? null);
   if (!d.allowed) throw new CommentError(d.reason, d.status);
-  const st = site.storage;
-  if (st.driver !== "prefix") throw new CommentError("Comments are only available on hosted sites.", 409);
+  // The edge writes to sites/<id>/ in the shared live bucket; a site on its own
+  // buckets has no edge writer in front of it.
+  if (site.storage.driver !== "prefix") throw new CommentError("Comments are only available on hosted sites.", 409);
   return signCommentTicket({
-    bucket: st.liveBucket,
-    region: st.region,
-    sitePrefix: st.prefix.replace(/\/+$/, ""),
+    siteId: site.siteId,
     pending: d.pending,
     uid: commenterUid(commenter.email, secret),
     name: commenter.name,
     role: d.role,
-    credentials,
+    secret,
     now,
   });
 }
@@ -158,8 +159,8 @@ function locate(key, root) {
  * The same checks every reader makes, applied before an admin sees it -- so a
  * junk upload shows up as junk to reject, not as a comment to approve.
  */
-async function inspect(ops, key, modified) {
-  const where = locate(key, PENDING_PREFIX);
+async function inspect(ops, key, modified, root = PENDING_PREFIX) {
+  const where = locate(key, root);
   if (!where) return { key, modified, problem: "not a comment key" };
   const got = await ops.read(key);
   if (got === null) return null;
@@ -186,6 +187,65 @@ export async function listPending(ops) {
     if (item !== null) out.push(item);
   }
   return out.sort((a, b) => a.modified - b.modified || (a.key < b.key ? -1 : 1));
+}
+
+// How many published entries one listing reads. Every entry is a GET, so a
+// site with years of comments would otherwise outlast the Lambda.
+export const PUBLISHED_READ_LIMIT = 500;
+
+/**
+ * Every published comment on the site, newest first, as readers would see it:
+ * each entry passes the readers' checks, then each thread is folded the way the
+ * library folds it, so a retracted comment is gone and a resolved one says so.
+ * What fails is returned as `problems` rather than dropped -- an upload that
+ * readers silently refuse is exactly what an admin needs to see.
+ *
+ * Whole threads, most recently active first, until PUBLISHED_READ_LIMIT entries:
+ * folding half a thread would report its events as pointing at nothing.
+ */
+export async function listPublished(ops, { limit = PUBLISHED_READ_LIMIT } = {}) {
+  const listed = await ops.list(COMMENTS_PREFIX);
+  const threads = new Map();
+  const problems = [];
+  for (const o of listed) {
+    const modified = new Date(o.modified).getTime();
+    const where = locate(o.key, COMMENTS_PREFIX);
+    if (!where) { problems.push({ key: o.key, modified, problem: "not a comment key" }); continue; }
+    const t = threads.get(where.thread) ?? { thread: where.thread, latest: 0, objects: [] };
+    t.latest = Math.max(t.latest, modified);
+    t.objects.push({ key: o.key, modified });
+    threads.set(where.thread, t);
+  }
+
+  const chosen = [];
+  let count = 0;
+  for (const t of [...threads.values()].sort((a, b) => b.latest - a.latest)) {
+    if (count > 0 && count + t.objects.length > limit) break;
+    chosen.push(t);
+    count += t.objects.length;
+  }
+
+  const comments = [];
+  for (const t of chosen) {
+    const items = [];
+    for (const o of t.objects) {
+      const got = await inspect(ops, o.key, o.modified, COMMENTS_PREFIX);
+      // Gone between the listing and the read: deleted by someone else meanwhile.
+      if (got === null) continue;
+      if (got.problem) { problems.push(got); continue; }
+      items.push({ key: got.key, name: got.name, modified: got.modified, author: got.author, comment: got.comment });
+    }
+    const folded = foldThread(items);
+    for (const c of folded.comments) comments.push({ ...c, thread: t.thread });
+    for (const r of folded.rejected) problems.push({ key: r.key, thread: t.thread, problem: r.reason });
+  }
+
+  return {
+    comments: comments.sort((a, b) => b.at - a.at || (a.key < b.key ? 1 : -1)),
+    problems: problems.sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0)),
+    threads: { shown: chosen.length, total: threads.size },
+    truncated: chosen.length < threads.size,
+  };
 }
 
 /**
@@ -235,6 +295,26 @@ export async function removeComment(ops, { thread, name }) {
   await ops.remove(key);
   for (const k of events) await ops.remove(k);
   return { key, events: events.length };
+}
+
+/**
+ * Clear a published object readers refuse -- junk, or a comment overwritten by
+ * someone else's upload -- which removeComment will not touch because it is not
+ * a readable comment. Only refused objects: a valid one goes through
+ * removeComment, so its events go with it.
+ */
+export async function discard(ops, key) {
+  if (typeof key !== "string" || !key.startsWith(COMMENTS_PREFIX) || key.includes("..")) {
+    throw new CommentError("Not a published comment object.", 400);
+  }
+  const got = await ops.read(key);
+  if (got === null) throw new CommentError("That object is already gone.", 404);
+  const item = await inspect(ops, key, new Date(got.modified).getTime(), COMMENTS_PREFIX);
+  if (item && !item.problem) {
+    throw new CommentError("Readers accept that one. Delete it as a comment instead.", 409);
+  }
+  await ops.remove(key);
+  return { key };
 }
 
 export async function reject(ops, key) {

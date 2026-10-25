@@ -1403,6 +1403,70 @@ async function loadComments() {
   $("saveComments").disabled = true;
   $("commentsStatus").textContent = commentsStatusText(data.settings);
   renderPending(data.pending);
+  renderPublished(await auth.api("/comments/published"));
+}
+
+/** An <li> and a function that adds a textContent-only line to it. */
+function commentItem() {
+  const li = document.createElement("li");
+  const line = (cls, text) => {
+    const p = document.createElement("p");
+    p.className = cls;
+    p.textContent = text;
+    li.append(p);
+  };
+  return { li, line };
+}
+
+function commentButton(actions, label, cls, path, payload) {
+  const b = document.createElement("button");
+  b.className = `btn small ${cls}`;
+  b.textContent = label;
+  b.addEventListener("click", () => moderate(path, payload, b));
+  actions.append(b);
+}
+
+function renderPublished(data) {
+  const list = $("publishedList");
+  list.replaceChildren();
+  const { shown, total } = data.threads;
+  $("publishedStatus").textContent = data.comments.length === 0
+    ? "Nothing is published."
+    : `${data.comments.length} comment${data.comments.length === 1 ? "" : "s"} on ${shown} page${shown === 1 ? "" : "s"}` +
+      (data.truncated ? `, from the ${shown} most recently active of ${total}.` : ".");
+  for (const c of data.comments) {
+    const { li, line } = commentItem();
+    const resolved = c.resolved ? ` · resolved by ${c.resolved.by.name}` : "";
+    const role = c.author.role !== "none" ? ` (${c.author.role})` : "";
+    line("meta", `${c.author.name}${role} on ${c.thread} · ${new Date(c.at).toLocaleString()}${resolved}`);
+    if (c.subject) line("subject", c.subject);
+    line("body", c.body);
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    commentButton(actions, "Delete", "danger", "/comments/remove", { thread: c.thread, name: c.name });
+    li.append(actions);
+    list.append(li);
+  }
+
+  const refused = $("refusedList");
+  refused.replaceChildren();
+  for (const id of ["refusedHead", "refusedNote", "refusedList"]) show($(id), data.problems.length > 0);
+  for (const p of data.problems) {
+    const { li, line } = commentItem();
+    const when = p.modified ? ` · ${new Date(p.modified).toLocaleString()}` : "";
+    line("meta", `${p.key}${when}`);
+    line("problem", p.problem);
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    // An event refused only by the fold (it points at nothing, or its author
+    // had no right to it) is a well-formed object, which discard() will not
+    // take. Only uploads refused on their own get a button.
+    if (!/refers to a comment|only the author|only someone with a role/.test(p.problem)) {
+      commentButton(actions, "Discard", "danger", "/comments/discard", { key: p.key });
+    }
+    li.append(actions);
+    refused.append(li);
+  }
 }
 
 function renderPending(items) {
@@ -1410,13 +1474,7 @@ function renderPending(items) {
   list.replaceChildren();
   show($("pendingEmpty"), items.length === 0);
   for (const it of items) {
-    const li = document.createElement("li");
-    const line = (cls, text) => {
-      const p = document.createElement("p");
-      p.className = cls;
-      p.textContent = text;
-      li.append(p);
-    };
+    const { li, line } = commentItem();
     const when = new Date(it.modified).toLocaleString();
     line("meta", `${it.author?.name ?? "Unknown"} on ${it.thread ?? "?"} · ${when}`);
     if (it.problem) {
@@ -1429,25 +1487,18 @@ function renderPending(items) {
     }
     const actions = document.createElement("div");
     actions.className = "actions";
-    const button = (label, cls, path) => {
-      const b = document.createElement("button");
-      b.className = `btn small ${cls}`;
-      b.textContent = label;
-      b.addEventListener("click", () => moderate(path, it.key, b));
-      actions.append(b);
-    };
-    if (!it.problem) button("Approve", "primary", "/comments/approve");
-    button("Reject", "danger", "/comments/reject");
+    if (!it.problem) commentButton(actions, "Approve", "primary", "/comments/approve", { key: it.key });
+    commentButton(actions, "Reject", "danger", "/comments/reject", { key: it.key });
     li.append(actions);
     list.append(li);
   }
 }
 
-async function moderate(path, key, btn) {
+async function moderate(path, payload, btn) {
   btn.disabled = true;
   err($("commentsErr"), null);
   try {
-    await auth.api(path, { method: "POST", body: JSON.stringify({ key }) });
+    await auth.api(path, { method: "POST", body: JSON.stringify(payload) });
     await loadComments();
   } catch (e) {
     err($("commentsErr"), e.message);

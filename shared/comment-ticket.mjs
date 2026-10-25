@@ -1,8 +1,8 @@
 // The server side of comments: who may have an upload ticket, the session that
-// proves who they are, and the S3 POST policy that IS the ticket.
+// proves who they are, and the signed token that IS the ticket.
 //
-// Pure apart from node:crypto. No S3, no network: the Lambda passes in its own
-// credentials and the site record, and gets back JSON to answer with.
+// Pure apart from node:crypto. No S3, no network: the Lambda passes in the
+// access secret and the site record, and gets back JSON to answer with.
 //
 // WHY A SECOND SESSION, NOT A FIELD ON qw_access
 //
@@ -33,8 +33,8 @@
 // A site that requires approval gets tickets for _pending/ instead of
 // _comments/. The edge only ever serves _comments/, so a pending comment is not
 // hidden by the reader library -- it is unreachable. Approving is a CMS action
-// that copies it across. The policy pins one prefix, so changing the setting
-// reaches readers within one ticket lifetime (TICKET_SEC).
+// that copies it across. The ticket names one of the two, so changing the
+// setting reaches readers within one ticket lifetime (TICKET_SEC).
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { COMMENT_LIMITS } from "./comments.mjs";
@@ -43,13 +43,10 @@ import { roleInSite } from "./site.mjs";
 export const COMMENTER_COOKIE = "qw_commenter";
 export const COMMENT_GRANT_SEC = 120;
 export const COMMENT_SESSION_SEC = 43200;
-// Short, and refetched by the library as it expires. A Lambda's own credentials
-// do not outlive a few hours either, and S3 refuses a policy once the
-// credentials that signed it have expired, whatever the policy says.
+// Short, and refetched by the library as it expires: removing someone, or
+// turning comments off, reaches them within one ticket. The edge refuses a
+// ticket that claims to live longer (infra/edge/comment-writer.js).
 export const TICKET_SEC = 3600;
-// A ticket never outlives the credentials that signed it, less this much, so a
-// reader is never handed a policy S3 is about to stop honouring.
-export const CREDENTIAL_MARGIN_SEC = 300;
 // Comment objects are never rewritten -- approval copies to a new key -- so the
 // CDN and browsers may keep them forever.
 export const COMMENT_CACHE_CONTROL = "public, max-age=31536000, immutable";
@@ -126,83 +123,47 @@ export function verifyCommenterToken(token, { kind, siteId, maxSec, secret, now 
 
 // -------------------------------------------------------------- tickets
 
-/** SigV4's derived key: secret -> date -> region -> service -> aws4_request. */
-export function signingKey(secretAccessKey, yyyymmdd, region, service) {
-  let key = `AWS4${secretAccessKey}`;
-  for (const part of [yyyymmdd, region, service, "aws4_request"]) key = createHmac("sha256", key).update(part).digest();
-  return key;
-}
+/** The write path a ticket is for, on the site's own host. */
+export const COMMENT_WRITE_PATH = "/__qw/post/";
 
-const amzDate = (ms) => new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+/** A display name as the ticket and x-amz-meta-name carry it: URI-encoded, no dots. */
+export const encodeTicketName = (name) => encodeURIComponent(String(name ?? "")).replace(/\./g, "%2E");
 
 /**
- * A browser-form upload ticket: an S3 POST policy, SigV4-signed with the
- * caller's credentials. S3 enforces every condition in it; the client library
- * only fills in the key and the file.
+ * An upload ticket: a token the edge checks on every comment write
+ * (infra/edge/comment-writer.js), under the same secret it holds for reader
+ * access.
  *
- *   key            starts with <sitePrefix>/_comments/ (or _pending/)
- *   size           1 .. COMMENT_LIMITS.objectBytes
- *   Content-Type   exactly application/json
- *   Cache-Control  exactly COMMENT_CACHE_CONTROL
- *   x-amz-meta-uid / x-amz-meta-name   exactly this person
- *   x-amz-meta-role                    their role on the site when the ticket
- *                                      was issued, or "none" -- what readers
- *                                      check before honouring a resolve
+ *   t1.<site>.<exp>.<uid>.<role>.<c|p>.<name>.<hmac>
  *
- * S3 also refuses a form carrying any field the policy does not name, so a
- * caller cannot add metadata of their own.
+ *   uid    the only uid a comment written with it may carry in its name
+ *   role   their role on the site when the ticket was issued, or "none" --
+ *          what readers check before honouring a resolve
+ *   c|p    _comments/ or _pending/: where the edge puts what is written
+ *   name   the display name, encodeTicketName()'d, so a dot never splits it
+ *
+ * The edge sets the object's author metadata, type and cache policy from this,
+ * never from the request, and writes with If-None-Match: * so nothing that
+ * exists can be overwritten.
  */
 export function signCommentTicket({
-  bucket, region, sitePrefix, pending, uid, name, role = "none", credentials, now = Date.now(), ttlSec = TICKET_SEC,
+  siteId, pending, uid, name, role = "none", secret, now = Date.now(), ttlSec = TICKET_SEC,
 }) {
   if (!COMMENTER_ROLES.includes(role)) throw new Error(`not a commenter role: ${role}`);
-  if (!/^[a-z0-9.-]{3,63}$/.test(bucket ?? "")) throw new Error(`not a bucket name: ${bucket}`);
-  if (!/^[a-z]{2}-[a-z]+-\d$/.test(region ?? "")) throw new Error(`not a region: ${region}`);
-  if (!/^sites\/[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(sitePrefix ?? "")) throw new Error(`not a site prefix: ${sitePrefix}`);
+  if (!SITE_RE.test(siteId ?? "")) throw new Error(`not a site id: ${siteId}`);
   if (!/^[a-z0-9]{8,32}$/.test(uid ?? "")) throw new Error(`not a commenter uid: ${uid}`);
-  const { accessKeyId, secretAccessKey, sessionToken, expiration } = credentials ?? {};
-  if (!accessKeyId || !secretAccessKey) throw new Error("no AWS credentials to sign a comment ticket with");
-  if (expiration) {
-    const left = Math.floor((new Date(expiration).getTime() - now) / 1000) - CREDENTIAL_MARGIN_SEC;
-    if (!(left > 0)) throw new Error("the credentials to sign a comment ticket with are about to expire");
-    ttlSec = Math.min(ttlSec, left);
-  }
-
-  const prefix = `${sitePrefix}/${pending ? "_pending" : "_comments"}/`;
-  const date = amzDate(now);
-  const scope = `${date.slice(0, 8)}/${region}/s3/aws4_request`;
-  const fields = {
-    "Content-Type": "application/json",
-    "Cache-Control": COMMENT_CACHE_CONTROL,
-    "x-amz-meta-uid": uid,
-    "x-amz-meta-name": encodeURIComponent(String(name ?? "")),
-    "x-amz-meta-role": role,
-    "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
-    "X-Amz-Credential": `${accessKeyId}/${scope}`,
-    "X-Amz-Date": date,
-    ...(sessionToken ? { "X-Amz-Security-Token": sessionToken } : {}),
-  };
-  const expires = new Date(now + ttlSec * 1000).toISOString();
-  const policy = Buffer.from(JSON.stringify({
-    expiration: expires,
-    conditions: [
-      { bucket },
-      ["starts-with", "$key", prefix],
-      ["content-length-range", 1, COMMENT_LIMITS.objectBytes],
-      ...Object.entries(fields).map(([k, v]) => ({ [k]: v })),
-    ],
-  })).toString("base64");
-
-  const key = signingKey(secretAccessKey, date.slice(0, 8), region, "s3");
+  const shown = String(name ?? "").trim().slice(0, COMMENT_LIMITS.authorChars) || "Reader";
+  const exp = Math.floor(now / 1000) + ttlSec;
+  const body = `t1.${siteId}.${exp}.${uid}.${role}.${pending ? "p" : "c"}.${encodeTicketName(shown)}`;
   return {
-    url: `https://${bucket}.s3.${region}.amazonaws.com/`,
-    fields: { ...fields, Policy: policy, "X-Amz-Signature": hmacHex(key, policy) },
-    prefix,
+    url: COMMENT_WRITE_PATH,
+    token: `${body}.${hmacHex(secretOrThrow(secret), body)}`,
+    prefix: pending ? "_pending/" : "_comments/",
     pending: Boolean(pending),
     uid,
-    name: String(name ?? ""),
+    name: shown,
     role,
     now: new Date(now).toISOString(),
-    expires,
+    expires: new Date(exp * 1000).toISOString(),
   };
 }

@@ -26,6 +26,18 @@
       }
     },
     {
+      "//": "The only write grant to the CDN, and the only way a comment is written: the edge writer (infra/edge/comment-writer.js) checks the ticket and the author's uid, then CloudFront PUTs it. Only under a site's _comments/ or _pending/, and only with If-None-Match present, so S3 refuses to replace an object that exists. That condition, not the function, is what makes a comment impossible to overwrite: a bug at the edge can write a bad new comment, never change an old one.",
+      "Sid": "CommentsWriteFromOurDistribution",
+      "Effect": "Allow",
+      "Principal": { "Service": "cloudfront.amazonaws.com" },
+      "Action": "s3:PutObject",
+      "Resource": ["arn:aws:s3:::__BUCKET__/sites/*/_comments/*", "arn:aws:s3:::__BUCKET__/sites/*/_pending/*"],
+      "Condition": {
+        "StringEquals": { "AWS:SourceArn": "arn:aws:cloudfront::__ACCOUNT__:distribution/__DISTRIBUTION__" },
+        "Null": { "s3:if-none-match": "false" }
+      }
+    },
+    {
       "//": "Everything must arrive over TLS.",
       "Sid": "DenyPlaintext",
       "Effect": "Deny",
