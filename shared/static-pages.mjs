@@ -130,7 +130,6 @@ export function checkStaticPath(raw, { slugs = [] } = {}) {
   if (path.endsWith("/")) throw new StaticPageRejected("A path must name a file, not a directory");
 
   const segments = path.split("/");
-  if (segments.length > 6) throw new StaticPageRejected("That path is nested too deeply");
   for (const seg of segments) {
     if (!SEGMENT_RE.test(seg) || seg === "." || seg === "..") {
       throw new StaticPageRejected(`"${seg}" is not a usable path segment`);

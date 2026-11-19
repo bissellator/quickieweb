@@ -60,10 +60,13 @@ test("a path must be relative, traversal-free and extensioned", () => {
 
   for (const bad of [
     "", "   ", "../secret.html", "shop/../../etc/passwd", "shop\\tees.html",
-    "shop/", "no-extension", "a/b/c/d/e/f/g.html", "-leading.html",
+    "shop/", "no-extension", "-leading.html",
   ]) {
     assert.throws(() => checkStaticPath(bad), StaticPageRejected, `should refuse: ${JSON.stringify(bad)}`);
   }
+  // No depth limit: a generated tree (a game's map tiles) nests as deep as it needs.
+  const deep = "3d/vamp-town/js/world/tiles/15/5526/11810.js";
+  assert.equal(checkStaticPath(deep), deep);
 });
 
 test("a static file may replace what the renderer writes", () => {
