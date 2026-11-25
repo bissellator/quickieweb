@@ -37,7 +37,9 @@ import {
   commenterFrom, grantRedirect, sessionCookies, hintCookie, CLEAR_SESSION_COOKIES, ticketFor, settingsFrom,
   listPending, listPublished, approve, reject, removeComment, discard,
 } from "./lib/comments.mjs";
-import { processLogs, readReport, readDay, readDetailWindow, META_KEY as STATS_META_KEY } from "./lib/stats.mjs";
+import {
+  processLogs, readReport, readDay, readDetailWindow, detailWithoutOwnReferrers, META_KEY as STATS_META_KEY,
+} from "./lib/stats.mjs";
 import { runStatsJobs } from "./lib/stats-schedule.mjs";
 import * as oauthStore from "./lib/oauth-store.mjs";
 import {
@@ -127,6 +129,17 @@ function logBucketFor(site, store) {
   return store.LOG_BUCKET || (site.storage?.driver === "prefix" ? HOSTED.logBucket : "");
 }
 
+// Every name the site answers at, so a click between its own pages is never a
+// referrer: baseUrl, the custom domain, and the hosted subdomain. Used when
+// logs are folded in and again when the report is read (older days predate it).
+function ownHostsFor(site) {
+  return [
+    site.site.baseUrl ? new URL(site.site.baseUrl).hostname : "",
+    site.site.domain ?? "",
+    HOSTED.domain && site.storage?.driver === "prefix" ? hostForSite(site.siteId, HOSTED.domain) : "",
+  ];
+}
+
 // Fold any newly delivered log objects into a site's stored report. The Stats
 // tab's Process button and the hourly schedule (processAllStats) both land here.
 async function processSiteStats(site, store, { force = false } = {}) {
@@ -137,13 +150,7 @@ async function processSiteStats(site, store, { force = false } = {}) {
     // (infra/fetch-geodb.mjs --platform), not a copy per site. A
     // self-hosted install keeps its own in staging and never looks here.
     geoFallback: site.storage?.driver === "prefix" ? sharedGeo : null,
-    // Every name the site answers at, so a click between its own pages is never
-    // a referrer: baseUrl, the custom domain, and the hosted subdomain.
-    ownHost: [
-      site.site.baseUrl ? new URL(site.site.baseUrl).hostname : "",
-      site.site.domain ?? "",
-      HOSTED.domain && site.storage?.driver === "prefix" ? hostForSite(site.siteId, HOSTED.domain) : "",
-    ],
+    ownHost: ownHostsFor(site),
     force,
   });
 }
@@ -1753,6 +1760,7 @@ async function routeApi({ method, segments, query, headers, body }) {
     }
     if (method === "GET") {
       const days = Math.min(Number(query.get("days") ?? 30) || 30, 365);
+      const ownHost = ownHostsFor(site);
 
       // /stats/detail   the drill-down tabs: geo, bots, acquisition, security.
       // Rolled across the same window as the summary unless ?date= names one
@@ -1762,11 +1770,13 @@ async function routeApi({ method, segments, query, headers, body }) {
         const date = query.get("date");
         if (date) {
           const one = await readDay(store, date);
-          return one ? json(200, one) : json(404, { error: `No processed logs for ${date}` });
+          return one
+            ? json(200, detailWithoutOwnReferrers(one, ownHost))
+            : json(404, { error: `No processed logs for ${date}` });
         }
         const report = await readReport(store, days);
         const detail = await readDetailWindow(store, report.dates);
-        return json(200, detail ?? { date: null, empty: true });
+        return json(200, detail ? detailWithoutOwnReferrers(detail, ownHost) : { date: null, empty: true });
       }
       // ?date= narrows the summary to one day, so the Overview follows a day
       // picked on the Days tab instead of still showing the whole window.
@@ -1774,7 +1784,7 @@ async function routeApi({ method, segments, query, headers, body }) {
       if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         return json(400, { error: `date must be YYYY-MM-DD, got ${date}` });
       }
-      return json(200, await readReport(store, days, { date }));
+      return json(200, await readReport(store, days, { date, ownHost }));
     }
     // POST folds any newly delivered log objects into the stored daily report.
     if (method === "POST") {

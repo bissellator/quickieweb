@@ -230,6 +230,35 @@ export function isOwnReferrer(ref, ownHosts) {
   return ownHosts.some((h) => ref === h || ref.endsWith(`.${h}`));
 }
 
+/**
+ * Drop the site's own hosts from stored referrer rows, at read time. Days
+ * folded before the own-host filter learned every name the site answers at
+ * have the site's own pages counted as referrers; this hides them without
+ * re-reading the logs. `urls` rows are full referrer URLs, not hosts.
+ */
+export function withoutOwnReferrers(rows, ownHost, { urls = false } = {}) {
+  if (!Array.isArray(rows)) return rows;
+  const own = normalizeOwnHosts(ownHost);
+  return rows.filter((r) => {
+    const host = urls ? referrerHost(r.key) : String(r.key ?? "").toLowerCase().replace(/^www\./, "");
+    return !host || !isOwnReferrer(host, own);
+  });
+}
+
+/** The detail object (readDay / readDetailWindow) with own-host referrers dropped. */
+export function detailWithoutOwnReferrers(detail, ownHost) {
+  if (!detail?.acquisition) return detail;
+  const a = detail.acquisition;
+  return {
+    ...detail,
+    acquisition: {
+      ...a,
+      referrers: withoutOwnReferrers(a.referrers, ownHost),
+      referrerUrls: withoutOwnReferrers(a.referrerUrls, ownHost, { urls: true }),
+    },
+  };
+}
+
 function fold(day, e, ownHosts, geo) {
   day.requests++;
   day.bandwidth += e["sc-bytes"];
@@ -863,7 +892,7 @@ export function windowStart(days, now = Date.now()) {
  * Read the stored report, narrowed to the last N days -- today counts as one,
  * so 7 means today and the six before it. `date` narrows it to that one day.
  */
-export async function readReport(store, days = 30, { date = null, now = Date.now() } = {}) {
+export async function readReport(store, days = 30, { date = null, now = Date.now(), ownHost = [] } = {}) {
   const stored = await store.getJson(REPORT_KEY, { days: {} });
   const meta = await store.getJson(META_KEY, { lastRun: null });
   const cutoff = windowStart(days, now);
@@ -910,7 +939,9 @@ export async function readReport(store, days = 30, { date = null, now = Date.now
     pages: roll("pages", 25),
     entryPages: roll("entryPages", 15),
     exitPages: roll("exitPages", 15),
-    referrers: roll("referrers", 20),
+    // Rolled wider than shown, so dropping the site's own hosts (stored by days
+    // folded before the filter knew them) still leaves a full top 20.
+    referrers: withoutOwnReferrers(roll("referrers", 40), ownHost).slice(0, 20),
     countries: named(roll("countries", 20)),
     browsers: roll("browsers", 10),
     devices: roll("devices", 6),
