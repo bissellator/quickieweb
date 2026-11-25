@@ -43,5 +43,6 @@ export function contentTypeFor(key) {
     map: "application/json; charset=utf-8", webmanifest: "application/manifest+json",
     avif: "image/avif", otf: "font/otf", mp4: "video/mp4", webm: "video/webm",
     pdf: "application/pdf",
+    glb: "model/gltf-binary", hdr: "image/vnd.radiance",
   }[ext] ?? "application/octet-stream";
 }

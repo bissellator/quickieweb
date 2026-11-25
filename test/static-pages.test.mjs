@@ -85,7 +85,8 @@ test("the platform's own paths, and what the console reads back, are refused", (
 
 test("any type a web page loads is accepted; anything else is refused", () => {
   for (const p of ["a.png", "a.jpg", "a.jpeg", "a.webp", "a.gif", "a.avif", "f.woff2", "f.woff",
-    "f.ttf", "f.otf", "m.mjs", "s.map", "site.webmanifest", "d.pdf", "v.mp4", "v.webm", "a.mp3"]) {
+    "f.ttf", "f.otf", "m.mjs", "s.map", "site.webmanifest", "d.pdf", "v.mp4", "v.webm", "a.mp3",
+    "3d/cast/liz.glb", "3d/sky/night_2k.hdr"]) {
     assert.equal(checkStaticPath(p), p, p);
   }
   for (const p of ["run.exe", "x.php", "archive.zip", "x.sh"]) {

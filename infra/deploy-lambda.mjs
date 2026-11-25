@@ -14,7 +14,7 @@
 // Nothing else. No iam:*, no s3:* on all buckets, no wildcard resources beyond
 // the two bucket ARNs.
 
-import { writeFile } from "node:fs/promises";
+import { writeFile, stat, readdir } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -47,7 +47,11 @@ const DIST = config.deploy.distributionId;
 // deploys; the function reports the gap through /api/health rather than failing
 // on a cold start.
 const PLATFORM = config.deploy.platformBucket ?? "";
-const LOGS = config.hosted?.tenantLogBucket ?? config.deploy.logBucket ?? "";
+// Both, when both exist: the installation's own site reads deploy.logBucket and
+// every hosted tenant reads hosted.tenantLogBucket. A REPLACE-ME placeholder is
+// not a bucket.
+const LOGS = [config.hosted?.tenantLogBucket, config.deploy.logBucket]
+  .filter((b) => b && !b.startsWith("REPLACE-ME"));
 const FN = config.deploy.functionName || "qw-admin";
 // Empty until infra/provision-access.mjs has run; every public site works
 // without it, and the function refuses to protect one until it is set.
@@ -75,6 +79,44 @@ const log = (s) => console.log(`    ${s}`);
 
 const ACCOUNT = (await aws(["sts", "get-caller-identity"], { region: "us-east-1" })).Account;
 console.log(`deploy ${FN}  account=${ACCOUNT} region=${REGION}`);
+
+// Refuse to deploy into an account other than the one this installation lives
+// in. Without this, a shell with the wrong AWS_PROFILE (or none, falling back
+// to [default]) creates a fresh role, function and PUBLIC function URL in that
+// other account, and then writes the new URL over deploy.functionUrl. That
+// happened on 2026-11-14. The account is read from ARNs config.json already
+// holds; a fresh install with none of them yet has nothing to check against.
+const KNOWN_ACCOUNTS = new Set([
+  config.hosted?.certificateArn, config.hosted?.accessKvsArn, config.deploy.certificateArn,
+].map((arn) => /^arn:aws:[^:]+:[^:]*:(\d{12}):/.exec(String(arn ?? ""))?.[1]).filter(Boolean));
+if (KNOWN_ACCOUNTS.size && !KNOWN_ACCOUNTS.has(ACCOUNT)) {
+  console.error(`FATAL: these credentials are for account ${ACCOUNT}, but config.json belongs to ` +
+    `${[...KNOWN_ACCOUNTS].join(", ")}. Set AWS_PROFILE to that account's deploy profile. Nothing was changed.`);
+  process.exit(1);
+}
+
+// Refuse to upload a zip older than the code it is built from. This script
+// ships infra/<fn>.zip exactly as it finds it; infra/build-lambda.mjs makes it.
+// Skipping the build once deployed three-week-old code while reporting
+// "updated qw-admin", and the change it was meant to ship looked broken.
+async function newestIn(p) {
+  const st = await stat(p);
+  if (!st.isDirectory()) return { at: st.mtimeMs, file: p };
+  let best = { at: 0, file: p };
+  for (const e of await readdir(p)) {
+    const n = await newestIn(path.join(p, e));
+    if (n.at > best.at) best = n;
+  }
+  return best;
+}
+const zipAt = await stat(ZIP).then((s) => s.mtimeMs, () => 0);
+const newest = (await Promise.all(["admin/server.mjs", "admin/lib", "shared"]
+  .map((p) => newestIn(path.join(ROOT, p))))).reduce((a, b) => (b.at > a.at ? b : a));
+if (newest.at > zipAt) {
+  console.error(`FATAL: ${path.relative(ROOT, ZIP)} is ${zipAt ? "older than" : "missing, and needed for"} ` +
+    `${path.relative(ROOT, newest.file)}. Run: node infra/build-lambda.mjs  -- nothing was changed.`);
+  process.exit(1);
+}
 
 // ---------------------------------------------------------------------- role
 step(1, "Execution role");
@@ -135,10 +177,8 @@ const inline = {
       Sid: "ReadAccessLogs",
       Effect: "Allow",
       Action: ["s3:GetObject", "s3:ListBucket"],
-      Resource: [
-        `arn:aws:s3:::${LOGS || "none"}`,
-        `arn:aws:s3:::${LOGS || "none"}/*`,
-      ],
+      Resource: (LOGS.length ? LOGS : ["none"])
+        .flatMap((b) => [`arn:aws:s3:::${b}`, `arn:aws:s3:::${b}/*`]),
     },
     {
       // The template library: READ ONLY, deliberately. The admin renders against
@@ -150,6 +190,15 @@ const inline = {
       Effect: "Allow",
       Action: ["s3:GetObject"],
       Resource: `arn:aws:s3:::${PLATFORM || "none"}/templates/*`,
+    },
+    {
+      // The one IP-to-city database every hosted site's Stats uses
+      // (infra/fetch-geodb.mjs --platform). Read only, for the same reason as
+      // the templates: it is shared by every tenant.
+      Sid: "ReadSharedGeoDatabase",
+      Effect: "Allow",
+      Action: ["s3:GetObject"],
+      Resource: `arn:aws:s3:::${PLATFORM || "none"}/geo/*`,
     },
     {
       // The account registry: read-write, because provisioning a site IS a
@@ -301,7 +350,10 @@ if (!existing) {
     "--role", roleArn,
     "--handler", "server.handler",
     "--zip-file", `fileb://${ZIP}`,
-    "--timeout", "60",
+    // 10 minutes is for the hourly stats run (lib/stats-schedule.mjs), which
+    // works through every site's log backlog. A browser request still gets cut
+    // off by CloudFront's origin timeout long before this.
+    "--timeout", "600",
     "--memory-size", "1024",       // sharp wants headroom; also buys faster CPU
     "--architectures", "x86_64",
     "--environment", JSON.stringify(env)]);
@@ -311,7 +363,7 @@ if (!existing) {
   // Code and config updates cannot overlap; wait for the first to settle.
   await execFileAsync("aws", ["lambda", "wait", "function-updated", "--function-name", FN, "--region", REGION]);
   await aws(["lambda", "update-function-configuration", "--function-name", FN,
-    "--timeout", "60", "--memory-size", "1024",
+    "--timeout", "600", "--memory-size", "1024",
     "--environment", JSON.stringify(env)]);
   log(`updated ${FN}`);
 }
@@ -359,6 +411,35 @@ for (const [sid, action] of [
   await aws(args, { allowFail: true });
 }
 log("invoke permission in place (both InvokeFunctionUrl and InvokeFunction)");
+
+// ------------------------------------------------------------ hourly stats
+// EventBridge invokes the function once an hour with {"qwTask":"process-stats"}
+// (processAllStats in admin/server.mjs), so access logs are folded in as they
+// arrive instead of piling up until someone opens a site's Stats tab.
+// No retries: the next hour is the retry, and a run is idempotent.
+step(4, "Hourly stats schedule");
+const RULE = `${FN}-process-stats`;
+const fnArn = (await aws(["lambda", "get-function-configuration", "--function-name", FN])).FunctionArn;
+const ruleArn = (await aws(["events", "put-rule", "--name", RULE,
+  "--schedule-expression", "rate(1 hour)", "--state", "ENABLED",
+  "--description", "quickieweb: fold new CloudFront access logs into every site's Stats"])).RuleArn;
+const targets = await aws(["events", "put-targets", "--rule", RULE, "--targets", JSON.stringify([{
+  Id: "qw-admin", Arn: fnArn,
+  Input: JSON.stringify({ qwTask: "process-stats" }),
+  RetryPolicy: { MaximumRetryAttempts: 0 },
+}])]);
+if (targets.FailedEntryCount) {
+  throw new Error(`put-targets on ${RULE} failed: ${JSON.stringify(targets.FailedEntries)}`);
+}
+// get-policy has a policy to return here: the Function URL grants above made one.
+const fnPolicy = JSON.parse((await aws(["lambda", "get-policy", "--function-name", FN])).Policy);
+const EVENTS_SID = "EventBridgeHourlyStats";
+if (!fnPolicy.Statement.some((st) => st.Sid === EVENTS_SID)) {
+  await aws(["lambda", "add-permission", "--function-name", FN, "--statement-id", EVENTS_SID,
+    "--action", "lambda:InvokeFunction", "--principal", "events.amazonaws.com",
+    "--source-arn", ruleArn]);
+}
+log(`${RULE}: rate(1 hour) -> ${FN}`);
 
 config.deploy.functionName = FN;
 config.deploy.functionUrl = fnUrl;

@@ -304,8 +304,10 @@ is a bucket write and a rebuild, not a redeploy.
 Publishing re-renders every published article, diffs staging against live by ETag,
 copies only what differs (server-side, inside S3 — bytes never round-trip through
 a browser or this laptop), deletes what staging no longer has, and invalidates the
-CDN. Under ~15 changed paths it invalidates precisely; past that it uses `/*`,
-because only the first 1000 paths per month are free.
+CDN for exactly the files it changed, so the rest of the site stays cached. Only a
+publish that changes more than 1000 files (a template or theme change on a big
+site) uses the site's wildcard instead, since paths past the first 1000 a month
+are billed each.
 
 `admin/*`, `admins.json`, `sitedata.json`, `media/*` and `_internal/*` are never
 published. The local `cli/deploy.mjs` excludes the same prefixes from its
@@ -562,7 +564,8 @@ Delete it and the next publish, which always rebuilds first, brings the
 template's version back.
 
 **Refused at upload:** traversal or absolute paths; types a web page does not
-load (the allowed list is `STATIC_EXTENSIONS` in `shared/static-pages.mjs`);
+load (the allowed list is `STATIC_EXTENSIONS` in `shared/static-pages.mjs`; it
+includes `.glb` models and `.hdr` skies for WebGL pages);
 the platform's paths (`admin/`, `_internal/`, `media/`, `__qw/`); the files the
 console reads back (`taxonomy.json`); a binary `favicon.ico` (the platform serves
 `.ico` as SVG, so upload `favicon.svg` or an SVG named `.ico`); and any path that

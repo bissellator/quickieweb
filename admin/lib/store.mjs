@@ -22,6 +22,7 @@ import {
   ListObjectsV2Command, CopyObjectCommand, HeadObjectCommand,
 } from "@aws-sdk/client-s3";
 import { CloudFrontClient, CreateInvalidationCommand } from "@aws-sdk/client-cloudfront";
+import { invalidationPaths } from "./invalidation.mjs";
 
 import { keyFor, unkeyFor } from "../../shared/site.mjs";
 import { cacheControlFor, contentTypeFor } from "../../shared/object-policy.mjs";
@@ -43,6 +44,22 @@ async function streamToBuffer(stream) {
   const chunks = [];
   for await (const c of stream) chunks.push(c);
   return Buffer.concat(chunks);
+}
+
+/**
+ * One object from the platform bucket, or null when it is absent (or when this
+ * installation has no platform bucket). Platform keys are installation-wide and
+ * never go through keyFor: nothing here belongs to a tenant.
+ */
+export async function getPlatformBuffer(key) {
+  if (!PLATFORM_BUCKET) return null;
+  try {
+    const res = await s3.send(new GetObjectCommand({ Bucket: PLATFORM_BUCKET, Key: clean(key) }));
+    return await streamToBuffer(res.Body);
+  } catch (err) {
+    if (err.name === "NoSuchKey" || err.$metadata?.httpStatusCode === 404) return null;
+    throw err;
+  }
 }
 
 // Cache-Control and Content-Type for every object, in shared/ so the CLI that
@@ -271,13 +288,12 @@ export function storeFor(site) {
       //
       // Under the `buckets` driver the prefix is empty and the two are the same
       // string, so this is one code path rather than a special case.
-      const touched = [...copied, ...removed].map((key) => `/${k(key)}`);
-      // Under ~15 paths, invalidate precisely; past that a wildcard is cheaper
-      // than paying per path, since only the first 1000 paths/month are free.
-      // The wildcard is scoped to THIS site: `/*` on a shared distribution would
-      // dump every other tenant's cache on every publish.
+      // Exact paths, so a publish clears only what it changed; the wildcard is
+      // for a re-render of most of the site (lib/invalidation.mjs). It is scoped
+      // to THIS site: `/*` on a shared distribution would dump every other
+      // tenant's cache.
       const wildcard = st.driver === "prefix" ? `/${st.prefix}*` : "/*";
-      const paths = touched.length > 15 ? [wildcard] : touched;
+      const paths = invalidationPaths([...copied, ...removed].map(k), wildcard);
       const res = await cf.send(new CreateInvalidationCommand({
         DistributionId: DISTRIBUTION_ID,
         InvalidationBatch: {
@@ -299,8 +315,7 @@ export function storeFor(site) {
     const mirrors = [];
     for (const id of st.mirrorDistributionIds ?? []) {
       if (!(copied.length || removed.length)) break;
-      const touched = [...copied, ...removed].map((key) => `/${key}`);
-      const paths = touched.length > 15 ? ["/*"] : touched;
+      const paths = invalidationPaths([...copied, ...removed], "/*");
       const res = await cf.send(new CreateInvalidationCommand({
         DistributionId: id,
         InvalidationBatch: {

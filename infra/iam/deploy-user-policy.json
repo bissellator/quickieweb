@@ -180,6 +180,53 @@
       }
     },
     {
+      "Sid": "AccessLogDeliveryRead",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeDeliverySources",
+        "logs:DescribeDeliveries",
+        "logs:DescribeDeliveryDestinations"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AccessLogDeliveryOwnOnly",
+      "Effect": "Allow",
+      "Action": [
+        "logs:PutDeliverySource",
+        "logs:GetDeliverySource",
+        "logs:PutDeliveryDestination",
+        "logs:GetDeliveryDestination",
+        "logs:CreateDelivery",
+        "logs:GetDelivery",
+        "logs:UpdateDeliveryConfiguration"
+      ],
+      "Resource": [
+        "arn:aws:logs:us-east-1:*:delivery-source:qw-*",
+        "arn:aws:logs:us-east-1:*:delivery-destination:qw-*",
+        "arn:aws:logs:us-east-1:*:delivery:*"
+      ]
+    },
+    {
+      "Sid": "CloudFrontVendedLogs",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:AllowVendedLogDeliveryForResource"
+      ],
+      "Resource": "arn:aws:cloudfront::*:distribution/*"
+    },
+    {
+      "Sid": "ScheduleOwnRulesOnly",
+      "Effect": "Allow",
+      "Action": [
+        "events:PutRule",
+        "events:PutTargets",
+        "events:DescribeRule",
+        "events:ListTargetsByRule"
+      ],
+      "Resource": "arn:aws:events:*:*:rule/qw-*"
+    },
+    {
       "Sid": "SeeWhoIAm",
       "Effect": "Allow",
       "Action": [

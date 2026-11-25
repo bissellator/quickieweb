@@ -5,6 +5,9 @@
 //   node infra/fetch-geodb.mjs              download this month's DB-IP City Lite and upload
 //   node infra/fetch-geodb.mjs --file x.mmdb.gz    upload a file you already have
 //   node infra/fetch-geodb.mjs --check      report what is currently in the bucket
+//   node infra/fetch-geodb.mjs --platform [...]   the hosted platform's ONE shared
+//       copy, s3://<platformBucket>/geo/, which every hosted site's Stats reads
+//       instead of keeping sixty megabytes per tenant (admin/server.mjs sharedGeo)
 //
 // Why DB-IP rather than MaxMind: GeoLite2 needs an account and a license key,
 // which makes "run this one command" impossible. DB-IP publishes City Lite in
@@ -36,16 +39,21 @@ const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const config = await loadConfig(ROOT).catch(reportConfigError);
 
-const STAGING = config.deploy.stagingBucket;
+const argv = process.argv.slice(2);
+const PLATFORM = argv.includes("--platform");
+
+// STAGING is the target bucket; the name is kept from when it was the only one.
+const STAGING = PLATFORM ? config.deploy.platformBucket : config.deploy.stagingBucket;
 const REGION = config.deploy.region;
-const KEY = "_internal/geo/dbip-city-lite.mmdb.gz";
+const KEY = PLATFORM ? "geo/dbip-city-lite.mmdb.gz" : "_internal/geo/dbip-city-lite.mmdb.gz";
 
 if (!STAGING || STAGING.includes("REPLACE-ME")) {
-  console.error("FATAL: no staging bucket in config.json. Run: node infra/provision.mjs");
+  console.error(PLATFORM
+    ? "FATAL: no deploy.platformBucket in config.json."
+    : "FATAL: no staging bucket in config.json. Run: node infra/provision.mjs");
   process.exit(1);
 }
 
-const argv = process.argv.slice(2);
 const arg = (name) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : null);
 
 if (argv.includes("--check")) {

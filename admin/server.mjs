@@ -23,12 +23,12 @@ import {
   verifyGoogleIdToken, verifyMicrosoftIdToken, idTokenProvider,
   AuthError, issueSession, verifySession, looksLikeSession,
 } from "./lib/auth.mjs";
-import { storeFor, s3, PLATFORM_BUCKET } from "./lib/store.mjs";
+import { storeFor, s3, PLATFORM_BUCKET, getPlatformBuffer } from "./lib/store.mjs";
 import * as registry from "./lib/registry.mjs";
 import {
   hostToSiteId, checkSiteId, newSiteRecord, normalizeMembers,
   validateMemberChange, canAdminister, canEdit, roleInSite, SITE_ROLES, hostForSite,
-  ACCESS_LEVELS, levelForRole, COMMENT_WHO,
+  ACCESS_LEVELS, levelForRole, COMMENT_WHO, logSourcesFor,
 } from "../shared/site.mjs";
 import { desiredEdgeState, planEdgeSync } from "../shared/access-plan.mjs";
 import { signGrant } from "../shared/access-token.mjs";
@@ -37,7 +37,8 @@ import {
   commenterFrom, grantRedirect, sessionCookies, hintCookie, CLEAR_SESSION_COOKIES, ticketFor, settingsFrom,
   listPending, listPublished, approve, reject, removeComment, discard,
 } from "./lib/comments.mjs";
-import { processLogs, readReport, readDay, readDetailWindow } from "./lib/stats.mjs";
+import { processLogs, readReport, readDay, readDetailWindow, META_KEY as STATS_META_KEY } from "./lib/stats.mjs";
+import { runStatsJobs } from "./lib/stats-schedule.mjs";
 import * as oauthStore from "./lib/oauth-store.mjs";
 import {
   looksLikePat, hashSecret, OAuthError, verifyPkce, isAllowedRedirectUri,
@@ -90,6 +91,24 @@ const ISSUER = process.env.OAUTH_ISSUER
 
 // Where a new tenant's bytes go. One pair of buckets behind one distribution,
 // with each site a prefix inside them; see shared/site.mjs for why.
+// infra/fetch-geodb.mjs --platform writes here; the Lambda role reads geo/* only.
+const PLATFORM_GEO_KEY = "geo/dbip-city-lite.mmdb.gz";
+
+// The role may read geo/* but not list it, so S3 answers a MISSING database
+// with 403, not 404. Say what that almost certainly means rather than surfacing
+// a bare AccessDenied from inside a stats run.
+async function sharedGeo() {
+  try {
+    return await getPlatformBuffer(PLATFORM_GEO_KEY);
+  } catch (err) {
+    if (err.name === "AccessDenied" || err.$metadata?.httpStatusCode === 403) {
+      throw new Error(`No shared geo database readable at s3://${PLATFORM_BUCKET}/${PLATFORM_GEO_KEY}. ` +
+        "Run: node infra/fetch-geodb.mjs --platform (and infra/deploy-lambda.mjs if the role predates geo/*).");
+    }
+    throw err;
+  }
+}
+
 const HOSTED = {
   domain: HOSTED_DOMAIN,
   region: process.env.AWS_BUCKET_REGION ?? "us-west-2",
@@ -99,6 +118,58 @@ const HOSTED = {
   distributionDomain: process.env.TENANT_DISTRIBUTION_DOMAIN ?? "",
   logBucket: process.env.TENANT_LOG_BUCKET ?? "",
 };
+
+// A hosted site's record keeps the log bucket it was created with, and every
+// site made before hosted logging existed was created with "". Those read the
+// installation's tenant log bucket instead of needing a backfill. "" means the
+// site has no access logs at all.
+function logBucketFor(site, store) {
+  return store.LOG_BUCKET || (site.storage?.driver === "prefix" ? HOSTED.logBucket : "");
+}
+
+// Fold any newly delivered log objects into a site's stored report. The Stats
+// tab's Process button and the hourly schedule (processAllStats) both land here.
+async function processSiteStats(site, store, { force = false } = {}) {
+  return processLogs({
+    s3, logBucket: logBucketFor(site, store), store,
+    sources: logSourcesFor(site, { hostedDomain: HOSTED.domain }),
+    // The hosted platform keeps one geo database for every tenant
+    // (infra/fetch-geodb.mjs --platform), not a copy per site. A
+    // self-hosted install keeps its own in staging and never looks here.
+    geoFallback: site.storage?.driver === "prefix" ? sharedGeo : null,
+    // Every name the site answers at, so a click between its own pages is never
+    // a referrer: baseUrl, the custom domain, and the hosted subdomain.
+    ownHost: [
+      site.site.baseUrl ? new URL(site.site.baseUrl).hostname : "",
+      site.site.domain ?? "",
+      HOSTED.domain && site.storage?.driver === "prefix" ? hostForSite(site.siteId, HOSTED.domain) : "",
+    ],
+    force,
+  });
+}
+
+// The hourly EventBridge run (infra/deploy-lambda.mjs, rule qw-admin-process-stats).
+// Without it a site's logs pile up until someone opens Stats, and the first
+// click then has a day or a month of objects to read inside one request.
+//
+// Takes no parameters from the event on purpose: the function's invoke grant is
+// public (see deploy-lambda's Function URL step), so anything that can reach it
+// can send this event. All it can do is what the hour would have done anyway.
+//
+// The ordering, time budget and failure handling live in lib/stats-schedule.mjs.
+export async function processAllStats({ remainingMs = () => Infinity } = {}) {
+  const jobs = [];
+  for (const siteId of await registry.listSiteIds(s3)) {
+    const site = await registry.getSite(s3, siteId);
+    if (!site) continue; // deleted between the list and the read
+    const store = storeFor(site);
+    if (!logBucketFor(site, store)) continue;
+    const meta = await store.getJson(STATS_META_KEY, { lastRun: null });
+    jobs.push({ siteId, lastRun: meta.lastRun, run: () => processSiteStats(site, store) });
+  }
+  return runStatsJobs(jobs, { remainingMs });
+}
+
 
 // ------------------------------------------------------------ origin lockdown
 //
@@ -1677,7 +1748,7 @@ async function routeApi({ method, segments, query, headers, body }) {
 
   // ---- stats: CloudFront access logs, processed on demand
   if (head === "stats") {
-    if (!store.LOG_BUCKET) {
+    if (!logBucketFor(site, store)) {
       return json(503, { error: "Access logging is not enabled. Run infra/enable-logging.mjs." });
     }
     if (method === "GET") {
@@ -1697,16 +1768,17 @@ async function routeApi({ method, segments, query, headers, body }) {
         const detail = await readDetailWindow(store, report.dates);
         return json(200, detail ?? { date: null, empty: true });
       }
-      return json(200, await readReport(store, days));
+      // ?date= narrows the summary to one day, so the Overview follows a day
+      // picked on the Days tab instead of still showing the whole window.
+      const date = query.get("date");
+      if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return json(400, { error: `date must be YYYY-MM-DD, got ${date}` });
+      }
+      return json(200, await readReport(store, days, { date }));
     }
     // POST folds any newly delivered log objects into the stored daily report.
     if (method === "POST") {
-      const result = await processLogs({
-        s3, logBucket: store.LOG_BUCKET, store,
-        ownHost: new URL(site.site.baseUrl).hostname,
-        force: query.get("force") === "1",
-      });
-      return json(200, result);
+      return json(200, await processSiteStats(site, store, { force: query.get("force") === "1" }));
     }
   }
 
@@ -1822,7 +1894,12 @@ export async function handleRequest({ method, pathname, query, headers, body }) 
 }
 
 // -------------------------------------------------------- Lambda Function URL
-export async function handler(event) {
+export async function handler(event, context) {
+  // EventBridge, not a browser: the hourly stats run. A Function URL event
+  // always carries requestContext.http, so the two cannot be confused.
+  if (event?.qwTask === "process-stats" && !event.requestContext) {
+    return processAllStats({ remainingMs: () => context?.getRemainingTimeInMillis?.() ?? Infinity });
+  }
   const rc = event.requestContext ?? {};
   const method = rc.http?.method ?? "GET";
   const rawPath = rc.http?.path ?? event.rawPath ?? "/";

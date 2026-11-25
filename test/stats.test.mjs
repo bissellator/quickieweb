@@ -125,6 +125,30 @@ check("probes stay out of readership", () => {
     `expected an env probe pattern, got ${JSON.stringify(detail.security.probePatterns)}`);
 });
 
+check("own hosts are not referrers", () => {
+  // stuckinawoman.com: baseUrl says www., the referrer host is stored without
+  // it, and the site also answers at its quickieweb subdomain. None of those
+  // is a referrer; only the outside site is.
+  const UA = "Mozilla/5.0%20(Macintosh;%20Intel%20Mac%20OS%20X)%20AppleWebKit/537.36%20(KHTML,%20like%20Gecko)%20Chrome/131.0%20Safari/537.36";
+  const row = (t, ref) => ["2026-09-05", t, "SEA19-C1", "5000", "8.8.8.8", "GET",
+    "www.stuckinawoman.com", "/a.html", "200", ref, UA, "-"].join("\t");
+  const lines = [
+    "#Version: 1.0",
+    "#Fields: date time x-edge-location sc-bytes c-ip cs-method cs-host cs-uri-stem sc-status cs-referer cs-user-agent cs-uri-query",
+    row("10:00:00", "https://www.stuckinawoman.com/"),
+    row("10:00:01", "https://stuckinawoman.com/b.html"),
+    row("10:00:02", "https://stuckinawoman.quickieweb.com/"),
+    row("10:00:03", "https://www.facebook.com/"),
+  ].join("\n");
+  const r = buildDay("2026-09-05", parseLogText(lines),
+    ["www.stuckinawoman.com", "stuckinawoman.com", "stuckinawoman.quickieweb.com"]);
+  const refs = r.detail.acquisition.referrers.map((x) => x.key);
+  assert.deepEqual(refs, ["facebook.com"], `only the outside site should remain: ${refs}`);
+  // and a single www. host still catches the bare form
+  const one = buildDay("2026-09-05", parseLogText(lines), "www.stuckinawoman.com");
+  assert.ok(!one.detail.acquisition.referrers.some((x) => x.key === "stuckinawoman.com"));
+});
+
 check("our own words are not probes", () => {
   // The publication writes about wp-config and .env files. Its own article
   // slugs and its own admin traffic trip every probe pattern in the list, and

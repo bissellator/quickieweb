@@ -114,8 +114,12 @@ test("settings accept exactly who and approval", () => {
 test("the edge may list comment threads, and nothing else in the bucket", async () => {
   const tpl = JSON.parse(await readFile(new URL("../infra/iam/tenant-live-bucket-policy.json", import.meta.url), "utf8"));
   const lists = tpl.Statement.filter((s) => [].concat(s.Action).some((a) => /ListBucket/.test(a)) && s.Effect === "Allow");
-  assert.equal(lists.length, 1, "exactly one Allow grants listing");
-  const [st] = lists;
+  // Two grants list: comment threads, and game rooms (infra/wire-rooms.mjs). No others.
+  assert.deepEqual(lists.map((s) => s.Sid).sort(),
+    ["CommentsListFromOurDistribution", "RoomsListFromOurDistribution"].sort(), "only comments and rooms may be listed");
+  const rooms = lists.find((s) => s.Sid === "RoomsListFromOurDistribution");
+  assert.deepEqual(rooms.Condition.StringLike, { "s3:prefix": "_rooms/*" }, "rooms list only under _rooms/");
+  const st = lists.find((s) => s.Sid !== "RoomsListFromOurDistribution");
   assert.deepEqual([].concat(st.Action), ["s3:ListBucket"]);
   assert.equal(st.Resource, "arn:aws:s3:::__BUCKET__");
   assert.deepEqual(st.Principal, { Service: "cloudfront.amazonaws.com" });
@@ -128,9 +132,14 @@ test("the edge may list comment threads, and nothing else in the bucket", async 
 test("the edge may write new comments, and nothing else, and never over an old one", async () => {
   const tpl = JSON.parse(await readFile(new URL("../infra/iam/tenant-live-bucket-policy.json", import.meta.url), "utf8"));
   const writes = tpl.Statement.filter((s) => s.Effect === "Allow" && [].concat(s.Action).some((a) => /Put|\*/.test(a)));
-  assert.equal(writes.length, 1, "exactly one Allow grants writing");
-  const [st] = writes;
-  assert.equal(st.Sid, "CommentsWriteFromOurDistribution");
+  // Two grants write: comments, and game rooms (infra/edge/room-writer.js). No others.
+  assert.deepEqual(writes.map((s) => s.Sid).sort(),
+    ["CommentsWriteFromOurDistribution", "RoomsWriteFromOurDistribution"].sort(), "only comments and rooms may be written");
+  const rooms = writes.find((s) => s.Sid === "RoomsWriteFromOurDistribution");
+  assert.deepEqual([].concat(rooms.Action), ["s3:PutObject"]);
+  assert.equal(rooms.Resource, "arn:aws:s3:::__BUCKET__/_rooms/*", "rooms write only under _rooms/");
+  assert.deepEqual(rooms.Condition.Null, { "s3:if-none-match": "false" }, "a room PUT never overwrites");
+  const st = writes.find((s) => s.Sid === "CommentsWriteFromOurDistribution");
   assert.deepEqual([].concat(st.Action), ["s3:PutObject"]);
   assert.deepEqual(st.Principal, { Service: "cloudfront.amazonaws.com" });
   assert.deepEqual(st.Resource, ["arn:aws:s3:::__BUCKET__/sites/*/_comments/*", "arn:aws:s3:::__BUCKET__/sites/*/_pending/*"]);

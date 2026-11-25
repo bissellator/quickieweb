@@ -133,6 +133,7 @@ async function handler(event) {
   }
 
   if (asked.substring(0, 15) === '/__qw/comments/') return comments(siteId, asked, request);
+  if (asked.substring(0, 12) === '/__qw/rooms/') return rooms(siteId, asked, request);
 
   request.uri = '/' + PREFIX + siteId + uri;
   return request;
@@ -173,6 +174,44 @@ function comments(siteId, asked, request) {
     return request;
   }
   if (!NAME_RE.test(name)) return notFound();
+  request.uri = '/' + base + name;
+  request.querystring = {};
+  return request;
+}
+
+// -------------------------------------------------------------------- rooms
+//
+// Game rooms (Vamp Town multiplayer): read-only, after the access check, like
+// comments. Written by infra/edge/room-writer.js at _rooms/<site>/<room>/.
+//
+//   /__qw/rooms/<room>/here/?since=<stamp>         list "I'm here" files after <stamp>
+//   /__qw/rooms/<room>/sig/<uid>/?since=<stamp>    list signals for <uid> after <stamp>
+//   /__qw/rooms/<room>/sig/<uid>/<name>            one signal
+//
+// Served by the /__qw/rooms/* behavior (infra/wire-rooms.mjs).
+var ROOM_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+var STAMP_RE = /^\d{8}T\d{9}Z$/;
+var ROOM_FILE_RE = /^\d{8}T\d{9}Z-[a-z0-9]{8,32}-[a-z0-9]{6,16}\.json$/;
+
+function rooms(siteId, asked, request) {
+  var p = asked.substring(12).split('/');
+  if (!p[0] || p[0].length > 40 || !ROOM_RE.test(p[0])) return notFound();
+  var dir, name;
+  if (p.length === 3 && p[1] === 'here' && p[2] === '') { dir = 'here/'; name = ''; }
+  else if (p.length === 4 && p[1] === 'sig' && /^[a-z0-9]{8,32}$/.test(p[2])) { dir = 'sig/' + p[2] + '/'; name = p[3]; }
+  else return notFound();
+  var base = '_rooms/' + siteId + '/' + p[0] + '/' + dir;
+  if (name === '') {
+    var q = request.querystring || {};
+    var out = { 'list-type': { value: '2' }, 'prefix': { value: base } };
+    if (q.since && STAMP_RE.test(q.since.value)) out['start-after'] = { value: base + q.since.value };
+    var c = q['continuation-token'];
+    if (c && c.value && c.value.length <= 1024) out['continuation-token'] = { value: c.value };
+    request.uri = '/';
+    request.querystring = out;
+    return request;
+  }
+  if (!ROOM_FILE_RE.test(name)) return notFound();
   request.uri = '/' + base + name;
   request.querystring = {};
   return request;

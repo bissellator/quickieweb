@@ -54,7 +54,7 @@ import {
 import { GeoLookup } from "./mmdb.mjs";
 
 const STATS_PREFIX = "_internal/stats";
-const META_KEY = `${STATS_PREFIX}/metadata.json`;
+export const META_KEY = `${STATS_PREFIX}/metadata.json`;
 const REPORT_KEY = `${STATS_PREFIX}/daily.json`;
 const dayKey = (date) => `${STATS_PREFIX}/days/${date}.json`;
 
@@ -213,7 +213,24 @@ function foldAcquisition(day, params, campaign) {
   if (campaign.clickId) bump(day.clickIds, `${campaign.clickId.param} (${campaign.clickId.network})`);
 }
 
-function fold(day, e, ownHost, geo) {
+// The site's own hostnames, as referrerHost spells them (lowercase, no www.).
+// A site answers at more than one name -- its quickieweb subdomain, a custom
+// domain, the www. form of either -- and a click from one page to the next
+// carries whichever the visitor was on. Every one of them is "us", not a
+// referrer. Accepts one host or a list.
+export function normalizeOwnHosts(ownHost) {
+  const list = Array.isArray(ownHost) ? ownHost : [ownHost];
+  return [...new Set(list
+    .map((h) => String(h ?? "").toLowerCase().split(":")[0].replace(/\.$/, "").replace(/^www\./, ""))
+    .filter(Boolean))];
+}
+
+/** Is this referrer host (from referrerHost) one of ours, or a subdomain of one? */
+export function isOwnReferrer(ref, ownHosts) {
+  return ownHosts.some((h) => ref === h || ref.endsWith(`.${h}`));
+}
+
+function fold(day, e, ownHosts, geo) {
   day.requests++;
   day.bandwidth += e["sc-bytes"];
 
@@ -231,7 +248,7 @@ function fold(day, e, ownHost, geo) {
   else if (rt === "Miss" || rt === "LimitExceeded" || rt === "CapacityExceeded") { day.misses++; hour.misses++; }
 
   bump(day.edgeLocations, e["x-edge-location"]);
-  bump(day.hosts, e["cs-host"]);
+  bump(day.hosts, e["x-host-header"] || e["cs-host"]);
 
   const status = e["sc-status"];
   bump(day.statuses, String(status));
@@ -321,7 +338,7 @@ function fold(day, e, ownHost, geo) {
 
   const rawRef = e["cs-referer"];
   const ref = referrerHost(rawRef);
-  const external = ref && ref !== ownHost && !ref.endsWith(`.${ownHost}`) ? ref : null;
+  const external = ref && !isOwnReferrer(ref, ownHosts) ? ref : null;
   if (external) {
     bump(day.referrers, external);
     if (rawRef) bump(day.referrerUrls, String(rawRef).slice(0, 300));
@@ -551,7 +568,8 @@ function sealDay(day) {
  */
 export function buildDay(date, entries, ownHost, geo = GeoLookup.none()) {
   const day = emptyDay(date);
-  for (const e of entries) fold(day, e, ownHost, geo);
+  const ownHosts = normalizeOwnHosts(ownHost);
+  for (const e of entries) fold(day, e, ownHosts, geo);
   return sealDay(day);
 }
 
@@ -687,37 +705,83 @@ export function mergeDetail(a, b) {
 /**
  * Load the geo database from object storage into memory, once per container.
  *
- * It lives in the staging bucket rather than the deployment package: 127MB
+ * It lives in object storage rather than the deployment package: 127MB
  * unpacked would triple the Lambda upload for a file that changes monthly and
  * that no other code path needs. Absent, everything still works and geography
  * degrades to CloudFront's country code -- which is what `available` reports so
  * the UI can say so instead of quietly showing an empty map.
+ *
+ * Where: the site's own staging store first (a self-hosted install, where
+ * infra/fetch-geodb.mjs puts it), then `fallback` -- the hosted platform's one
+ * shared copy, so sixty megabytes are not stored once per tenant.
+ *
+ * Only a database that was FOUND is cached. Caching "none" meant that once any
+ * site ran stats before a database existed, every site served by that container
+ * kept getting no geography after one was uploaded, until the container died.
  */
 let geoPromise = null;
-export function loadGeo(store, key = "_internal/geo/dbip-city-lite.mmdb.gz") {
-  if (!geoPromise) {
-    geoPromise = (async () => {
-      const { gunzipSync } = await import("node:zlib");
-      const { MMDBReader } = await import("./mmdb.mjs");
-      // Absent is a legitimate state and getBuffer says so with null. A file
-      // that is present but unreadable is not: that throws, because a stats run
-      // that silently drops to country-only geography would look identical to
-      // one that never had a database, and you would never go looking.
-      const buf = await store.getBuffer(key);
-      if (!buf) return GeoLookup.none();
-      const raw = buf[0] === 0x1f && buf[1] === 0x8b ? gunzipSync(buf) : buf;
-      return new GeoLookup(new MMDBReader(raw));
-    })();
-  }
-  return geoPromise;
+export const GEO_KEY = "_internal/geo/dbip-city-lite.mmdb.gz";
+export function loadGeo(store, { key = GEO_KEY, fallback = null } = {}) {
+  if (!geoPromise) geoPromise = readGeo(store, key, fallback);
+  const attempt = geoPromise;
+  return attempt.then((geo) => {
+    if (geo) return geo;
+    if (geoPromise === attempt) geoPromise = null; // absent: look again next run
+    return GeoLookup.none();
+  }, (err) => {
+    if (geoPromise === attempt) geoPromise = null;
+    throw err;
+  });
+}
+
+async function readGeo(store, key, fallback) {
+  const { gunzipSync } = await import("node:zlib");
+  const { MMDBReader } = await import("./mmdb.mjs");
+  // Absent is a legitimate state and says so with null. A file that is
+  // present but unreadable is not: that throws, because a stats run that
+  // silently drops to country-only geography would look identical to one
+  // that never had a database, and you would never go looking.
+  const buf = (await store.getBuffer(key)) ?? (fallback ? await fallback() : null);
+  if (!buf) return null;
+  const raw = buf[0] === 0x1f && buf[1] === 0x8b ? gunzipSync(buf) : buf;
+  return new GeoLookup(new MMDBReader(raw));
+}
+
+/**
+ * Does this log entry belong to the site? `hosts` null means the source is the
+ * site's alone (its own distribution) and everything counts. A list means a
+ * shared distribution: only requests whose viewer Host header is one of the
+ * site's names count. An entry with no Host header on a shared source is
+ * dropped -- counting it would hand one tenant another tenant's traffic.
+ */
+export function entryBelongs(e, hosts) {
+  if (!hosts) return true;
+  const h = String(e["x-host-header"] ?? "").toLowerCase().split(":")[0];
+  return h !== "" && hosts.includes(h);
 }
 
 /**
  * Fold new log objects into the stored daily report.
- * Returns { processed, skipped, days, truncated, geo }.
+ *
+ * `sources` is where this site's logs live inside `logBucket`: a list of
+ * { prefix, hosts }. A self-hosted install has one, the whole bucket, unfiltered.
+ * A hosted site has its shared distribution's folder filtered to its hostnames,
+ * plus one unfiltered folder per custom-domain distribution of its own. See
+ * logSourcesFor in shared/site.mjs.
+ *
+ * Returns { processed, skipped, days, truncated, geo, foreign }.
  */
-export async function processLogs({ s3, logBucket, store, ownHost, maxFiles = MAX_FILES_PER_RUN, force = false }) {
-  const { GetObjectCommand, ListObjectsV2Command } = await import("@aws-sdk/client-s3");
+export async function processLogs({
+  s3, logBucket, store, ownHost, sources = [{ prefix: "", hosts: null }],
+  maxFiles = MAX_FILES_PER_RUN, force = false,
+  // Tests pass stand-in command classes; the SDK is not installed on a laptop.
+  sdk = null,
+  // () => Buffer|null: the platform's shared geo database (see loadGeo).
+  geoFallback = null,
+}) {
+  const { GetObjectCommand, ListObjectsV2Command } = sdk ?? await import("@aws-sdk/client-s3");
+  if (!sources.length) throw new Error("processLogs: no log sources for this site");
+  const ownHosts = normalizeOwnHosts(ownHost);
 
   const meta = await store.getJson(META_KEY, { processed: [], lastRun: null });
   // force re-reads every log object still in the bucket and rebuilds the report
@@ -726,19 +790,29 @@ export async function processLogs({ s3, logBucket, store, ownHost, maxFiles = MA
   // forever, because their log files are marked done.
   const done = force ? new Set() : new Set(meta.processed);
 
-  const objects = [];
-  let token;
-  do {
-    const res = await s3.send(new ListObjectsV2Command({ Bucket: logBucket, ContinuationToken: token }));
-    for (const o of res.Contents ?? []) if (o.Size > 0 && !done.has(o.Key)) objects.push(o.Key);
-    token = res.IsTruncated ? res.NextContinuationToken : undefined;
-  } while (token);
+  // key -> hosts filter of the source it was listed under
+  const filterFor = new Map();
+  const listed = new Set();
+  for (const { prefix, hosts } of sources) {
+    let token;
+    do {
+      const res = await s3.send(new ListObjectsV2Command({
+        Bucket: logBucket, Prefix: prefix || undefined, ContinuationToken: token,
+      }));
+      for (const o of res.Contents ?? []) {
+        listed.add(o.Key);
+        if (o.Size > 0 && !done.has(o.Key)) filterFor.set(o.Key, hosts ?? null);
+      }
+      token = res.IsTruncated ? res.NextContinuationToken : undefined;
+    } while (token);
+  }
 
-  objects.sort();
+  const objects = [...filterFor.keys()].sort();
   const truncated = objects.length > maxFiles;
   const batch = objects.slice(0, maxFiles);
+  let foreign = 0;
 
-  const geo = batch.length ? await loadGeo(store) : GeoLookup.none();
+  const geo = batch.length ? await loadGeo(store, { fallback: geoFallback }) : GeoLookup.none();
   const stored = force ? { days: {} } : await store.getJson(REPORT_KEY, { days: {} });
   const working = {};
 
@@ -746,9 +820,11 @@ export async function processLogs({ s3, logBucket, store, ownHost, maxFiles = MA
     const res = await s3.send(new GetObjectCommand({ Bucket: logBucket, Key: key }));
     const chunks = [];
     for await (const c of res.Body) chunks.push(c);
+    const hosts = filterFor.get(key);
     for (const e of await parseLogBuffer(Buffer.concat(chunks))) {
       if (!e.date) continue;
-      fold((working[e.date] ??= emptyDay(e.date)), e, ownHost, geo);
+      if (!entryBelongs(e, hosts)) { foreign++; continue; }
+      fold((working[e.date] ??= emptyDay(e.date)), e, ownHosts, geo);
     }
     done.add(key);
   }
@@ -763,22 +839,36 @@ export async function processLogs({ s3, logBucket, store, ownHost, maxFiles = MA
 
   await store.putJson(REPORT_KEY, { days, updatedAt: new Date().toISOString() });
   await store.putJson(META_KEY, {
-    processed: [...done].slice(-5000), // bounded; old keys expire from the bucket
+    // Exactly the processed keys still in the bucket. This used to be the last
+    // 5000 keys, which on a shared distribution's folder can be fewer than the
+    // retention window holds -- and a key that fell off the list was read again
+    // and its traffic counted twice. A key only leaves this list once its object
+    // has expired, so it can never be listed again.
+    processed: [...done].filter((k) => listed.has(k)),
     lastRun: new Date().toISOString(),
   });
 
   return {
     processed: batch.length, skipped: objects.length - batch.length,
-    days: Object.keys(working).length, truncated, geo: geo.available,
+    days: Object.keys(working).length, truncated, geo: geo.available, foreign,
   };
 }
 
-/** Read the stored report, narrowed to the last N days. */
-export async function readReport(store, days = 30) {
+/** First date (UTC, YYYY-MM-DD) of a window of N days that ends today. */
+export function windowStart(days, now = Date.now()) {
+  return new Date(now - (days - 1) * 86400000).toISOString().slice(0, 10);
+}
+
+/**
+ * Read the stored report, narrowed to the last N days -- today counts as one,
+ * so 7 means today and the six before it. `date` narrows it to that one day.
+ */
+export async function readReport(store, days = 30, { date = null, now = Date.now() } = {}) {
   const stored = await store.getJson(REPORT_KEY, { days: {} });
   const meta = await store.getJson(META_KEY, { lastRun: null });
-  const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
-  const list = Object.values(stored.days).filter((d) => d.date >= cutoff)
+  const cutoff = windowStart(days, now);
+  const keep = date ? (d) => d.date === date : (d) => d.date >= cutoff;
+  const list = Object.values(stored.days).filter(keep)
     .sort((a, b) => (a.date < b.date ? 1 : -1));
 
   const totals = {};
@@ -790,7 +880,8 @@ export async function readReport(store, days = 30) {
 
   return {
     lastRun: meta.lastRun,
-    windowDays: days,
+    windowDays: date ? 1 : days,
+    date,
     dates: list.map((d) => d.date),
     totals: {
       ...totals,

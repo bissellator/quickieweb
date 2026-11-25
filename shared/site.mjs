@@ -85,6 +85,38 @@ export function hostToSiteId(host, hostedDomain) {
 export const hostForSite = (siteId, hostedDomain) =>
   siteId === "www" ? hostedDomain : `${siteId}.${hostedDomain}`;
 
+/** Where one distribution's access logs land inside a log bucket. */
+export const logPrefixFor = (distributionId) => `cf/${distributionId}/`;
+
+/**
+ * Which access logs belong to a site, as { prefix, hosts } for processLogs.
+ *
+ * buckets driver (self-hosted): the log bucket is the site's own and holds one
+ *   distribution's logs at its root, so the whole bucket counts.
+ * prefix driver (hosted): the shared distribution logs every tenant into one
+ *   folder, so only requests for this site's hostnames count. A custom-domain
+ *   distribution (storage.mirrorDistributionIds) serves this site alone, so its
+ *   folder counts whole.
+ */
+export function logSourcesFor(site, { hostedDomain = "" } = {}) {
+  const st = site.storage ?? {};
+  if (st.driver !== "prefix") return [{ prefix: "", hosts: null }];
+
+  const hosts = [...new Set([
+    hostedDomain ? hostForSite(site.siteId, hostedDomain) : "",
+    // www.<apex> answers for the marketing site too (a redirect, still traffic)
+    hostedDomain && site.siteId === "www" ? `www.${hostedDomain}` : "",
+    site.site?.domain ?? "",
+  ].map((h) => String(h).toLowerCase()).filter(Boolean))];
+
+  const sources = [];
+  if (st.distributionId) sources.push({ prefix: logPrefixFor(st.distributionId), hosts });
+  for (const id of st.mirrorDistributionIds ?? []) {
+    if (id !== st.distributionId) sources.push({ prefix: logPrefixFor(id), hosts: null });
+  }
+  return sources;
+}
+
 /**
  * Is this id available to hand out? Reserved names are refused even to staff:
  * the point is that they never become a tenant's, not that they are hard to get.

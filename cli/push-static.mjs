@@ -172,20 +172,34 @@ if (DRY) {
 
 // ------------------------------------------------------------------ write
 step(4, "Stage");
-for (const p of put) {
-  const f = local.get(p);
-  // Two objects: the held source (no-store, never published) and the staged
-  // copy a publish promotes. The staged one is written second, so a failure
-  // between them leaves a source that the next publish's rebuild re-stages.
-  for (const key of [`${STATIC_PREFIX}${p}`, p]) {
-    await aws([
-      "s3api", "put-object", "--bucket", st.stagingBucket, "--key", keyFor(st, key),
-      "--body", f.full, "--content-type", contentTypeOf(p), "--cache-control", cacheControlFor(key),
-      "--content-md5", Buffer.from(f.md5, "hex").toString("base64"),
-    ]);
+// Files go up PARALLEL at a time: each put is its own aws CLI process (a second or two to start on Windows), so one
+// at a time a few hundred files took many minutes. The first failure stops the workers and fails the run.
+const PARALLEL = 8;
+let next = 0, failed = null;
+async function worker() {
+  while (!failed && next < put.length) {
+    const p = put[next++];
+    const f = local.get(p);
+    // Two objects: the held source (no-store, never published) and the staged
+    // copy a publish promotes. The staged one is written second, so a failure
+    // between them leaves a source that the next publish's rebuild re-stages.
+    try {
+      for (const key of [`${STATIC_PREFIX}${p}`, p]) {
+        await aws([
+          "s3api", "put-object", "--bucket", st.stagingBucket, "--key", keyFor(st, key),
+          "--body", f.full, "--content-type", contentTypeOf(p), "--cache-control", cacheControlFor(key),
+          "--content-md5", Buffer.from(f.md5, "hex").toString("base64"),
+        ]);
+      }
+    } catch (e) {
+      failed ??= e;
+      return;
+    }
+    log(`put ${p}`);
   }
-  log(`put ${p}`);
 }
+await Promise.all(Array.from({ length: Math.min(PARALLEL, put.length) }, worker));
+if (failed) throw failed;
 if (PRUNE) {
   for (const p of gone) {
     await aws(["s3api", "delete-object", "--bucket", st.stagingBucket, "--key", keyFor(st, `${STATIC_PREFIX}${p}`)]);

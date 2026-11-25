@@ -33,7 +33,7 @@ const config = await loadConfig(ROOT).catch(reportConfigError);
 const STAGING = config.deploy.stagingBucket;
 const LOGS = config.deploy.logBucket;
 const REGION = config.deploy.region;
-const OWN_HOST = new URL(config.site.baseUrl).hostname;
+const OWN_HOST = [new URL(config.site.baseUrl).hostname, config.site.domain ?? ""];
 const DRY = process.argv.includes("--dry-run");
 
 const GEO_KEY = "_internal/geo/dbip-city-lite.mmdb.gz";

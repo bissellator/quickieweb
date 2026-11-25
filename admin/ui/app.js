@@ -885,7 +885,8 @@ const place = (r) => [r.city, r.region, r.countryName || r.country].filter(Boole
 const latlng = (r) => (r.lat === null || r.lat === undefined ? "" : `${r.lat.toFixed(2)}, ${r.lng.toFixed(2)}`);
 
 // ------------------------------------------------------------- state + tabs
-let statsSummary = null;
+let statsSummary = null;      // the whole window: the Days tab always lists it
+let statsDaySummary = null;   // the same shape for the one day picked, if any
 let statsDetail = null;
 let statsDetailScope = null;   // null = the whole window, or a YYYY-MM-DD
 let statsTab = "overview";
@@ -911,9 +912,11 @@ function scopeLine() {
 }
 
 // ------------------------------------------------------------------ panels
-function panelOverview(s) {
+// `days` is the whole window's daily rows, so the graph keeps every bar when
+// one day is picked; `picked` is that day, drawn highlighted.
+function panelOverview(s, days = s.daily, picked = null) {
   const t = s.totals;
-  const peak = Math.max(...s.daily.map((d) => d.sessions), 1);
+  const peak = Math.max(...days.map((d) => d.sessions), 1);
   return `
     <div class="tiles">
       ${tile("visits", num(t.sessions), "30 min session gap")}
@@ -933,10 +936,12 @@ function panelOverview(s) {
     </div>
 
     <div class="statbox"><h3>Visits per day</h3>
-      <ul class="spark">${s.daily.slice().reverse().map((d) =>
-        `<li title="${esc(d.date)}: ${d.sessions} visits, ${d.pageViews} views"><span style="height:${
+      <ul class="spark${picked ? " has-pick" : ""}">${days.slice().reverse().map((d) =>
+        `<li role="button" tabindex="0" data-date="${esc(d.date)}"${d.date === picked ? ' class="is-pick"' : ""}
+          title="${esc(d.date)}: ${d.sessions} visits, ${d.pageViews} views. ${
+            d.date === picked ? "Click to show the whole window" : "Click to show just this day"}"><span style="height:${
           Math.max(2, Math.round((d.sessions / peak) * 100))}%"></span></li>`).join("")}</ul>
-      <p class="muted small">${esc(s.daily.at(-1).date)} to ${esc(s.daily[0].date)}</p>
+      <p class="muted small">${esc(days.at(-1).date)} to ${esc(days[0].date)}. Click a bar to see that day.</p>
     </div>
 
     ${s.audioListens?.length ? grid("Audio", [
@@ -1148,10 +1153,22 @@ function hourlyChart(hours) {
 // ------------------------------------------------------------------- render
 async function renderStatsTab() {
   const box = $("statsBody");
-  const s = statsSummary;
-  if (statsTab === "overview") { box.innerHTML = panelOverview(s); return; }
+  const s = statsDetailScope ? statsDaySummary : statsSummary;
+  if (statsTab === "overview") {
+    box.innerHTML = scopeLine() + panelOverview(s, statsSummary.daily, statsDetailScope);
+    box.querySelectorAll(".spark li[data-date]").forEach((li) => {
+      const pick = () => selectDay(li.dataset.date === statsDetailScope ? null : li.dataset.date);
+      li.addEventListener("click", pick);
+      li.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); }
+      });
+    });
+    const clear = $("clearScope");
+    if (clear) clear.addEventListener("click", () => selectDay(null));
+    return;
+  }
   if (statsTab === "days") {
-    box.innerHTML = panelDays(s);
+    box.innerHTML = panelDays(statsSummary);
     box.querySelectorAll("button.day").forEach((b) =>
       b.addEventListener("click", () => selectDay(b.dataset.date)));
     return;
@@ -1182,12 +1199,23 @@ async function renderStatsTab() {
   if (clear) clear.addEventListener("click", () => selectDay(null));
 }
 
-function selectDay(date) {
+async function selectDay(date) {
   statsDetailScope = date;
   statsDetail = null;
+  statsDaySummary = null;
   if (date && statsTab === "days") statsTab = "overview";
   syncStatsTabs();
-  renderStatsTab();
+  if (date) {
+    const box = $("statsBody");
+    box.innerHTML = "<p class='muted'>loading...</p>";
+    try {
+      statsDaySummary = await auth.api(`/stats?date=${encodeURIComponent(date)}`);
+    } catch (e) {
+      box.innerHTML = `<p class="err">${esc(e.message)}</p>`;
+      return;
+    }
+  }
+  await renderStatsTab();
 }
 
 function syncStatsTabs() {
@@ -1202,6 +1230,9 @@ async function loadStats() {
   try {
     statsSummary = await auth.api(`/stats?days=${statsWindowDays()}`);
     statsDetail = null;
+    statsDaySummary = statsDetailScope
+      ? await auth.api(`/stats?date=${encodeURIComponent(statsDetailScope)}`)
+      : null;
 
     if (!statsSummary.daily.length) {
       box.innerHTML = `<p class="muted">No data yet. CloudFront delivers logs every few

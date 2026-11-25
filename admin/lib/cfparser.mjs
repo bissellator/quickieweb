@@ -47,6 +47,10 @@ function normalize(e) {
     "cs-uri-query": dash(e["cs-uri-query"]),
     "cs-method": e["cs-method"],
     "cs-host": e["cs(Host)"] ?? e["cs-host"],
+    // cs-host is the distribution's own *.cloudfront.net name, not what the
+    // visitor typed. x-host-header is the Host header the viewer sent, which is
+    // the only field that tells one tenant from another on a shared distribution.
+    "x-host-header": dash(e["x-host-header"]).toLowerCase(),
     "cs-uri-stem": e["cs-uri-stem"],
     "sc-status": num(e["sc-status"]),
     "cs-referer": dash(e["cs(Referer)"] ?? e["cs-referer"]),

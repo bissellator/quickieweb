@@ -91,12 +91,16 @@ const PLATFORM_PREFIXES = ["admin/", "_internal/", "media/", "__qw/"];
  * .ico is in the list because the platform's own favicon.ico is an SVG document
  * (render.mjs) and is served as SVG; a binary icon is refused at the door rather
  * than served with a type that breaks it. See checkStaticBody.
+ *
+ * .glb (a 3D model) and .hdr (a Radiance HDR sky) are what a WebGL page fetches
+ * and parses itself, e.g. with three.js's GLTFLoader and RGBELoader.
  */
 export const STATIC_EXTENSIONS = new Set([
   "html", "htm", "css", "js", "mjs", "json", "map", "webmanifest", "txt", "xml", "svg", "ico",
   "png", "jpg", "jpeg", "gif", "webp", "avif",
   "woff2", "woff", "ttf", "otf",
   "mp3", "m4a", "ogg", "wav", "mp4", "webm", "pdf",
+  "glb", "hdr",
 ]);
 
 const TEXT_EXT = new Set(["html", "htm", "css", "js", "mjs", "json", "map", "webmanifest", "txt", "xml", "svg", "ico"]);

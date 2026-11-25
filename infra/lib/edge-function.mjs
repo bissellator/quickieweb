@@ -61,3 +61,16 @@ export function routerConfig(domain, kvsArn) {
     ...(kvsArn ? { KeyValueStoreAssociations: { Quantity: 1, Items: [{ KeyValueStoreARN: kvsArn }] } } : {}),
   };
 }
+
+// The room writer (Vamp Town multiplayer): infra/edge/room-writer.js, wired by
+// infra/wire-rooms.mjs. Same store, same ticket secret as the comment writer.
+export const roomWriterName = (domain) => `${domain.split(".")[0]}-room-writer`;
+export const buildRoomWriterSource = (root, domain) => buildEdgeSource(root, "room-writer.js", domain);
+export function roomWriterConfig(domain, kvsArn) {
+  if (!kvsArn) throw new Error("the room writer needs the edge store that holds _secret");
+  return {
+    Comment: `${domain} game room writes: ticket and uid checked before S3`,
+    Runtime: "cloudfront-js-2.0",
+    KeyValueStoreAssociations: { Quantity: 1, Items: [{ KeyValueStoreARN: kvsArn }] },
+  };
+}

@@ -38,6 +38,30 @@
       }
     },
     {
+      "//": "Game rooms (Vamp Town multiplayer) are listed by the edge (infra/edge/tenant-router.js, rooms()). ListBucket only where the prefix is a room under _rooms/; files there are short-lived and expired by a lifecycle rule (infra/wire-rooms.mjs).",
+      "Sid": "RoomsListFromOurDistribution",
+      "Effect": "Allow",
+      "Principal": { "Service": "cloudfront.amazonaws.com" },
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::__BUCKET__",
+      "Condition": {
+        "StringEquals": { "AWS:SourceArn": "arn:aws:cloudfront::__ACCOUNT__:distribution/__DISTRIBUTION__" },
+        "StringLike": { "s3:prefix": "_rooms/*" }
+      }
+    },
+    {
+      "//": "The room writer (infra/edge/room-writer.js) checks the ticket and the writer's uid, then CloudFront PUTs the file. Only under _rooms/, and only with If-None-Match present, so nothing is ever overwritten.",
+      "Sid": "RoomsWriteFromOurDistribution",
+      "Effect": "Allow",
+      "Principal": { "Service": "cloudfront.amazonaws.com" },
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::__BUCKET__/_rooms/*",
+      "Condition": {
+        "StringEquals": { "AWS:SourceArn": "arn:aws:cloudfront::__ACCOUNT__:distribution/__DISTRIBUTION__" },
+        "Null": { "s3:if-none-match": "false" }
+      }
+    },
+    {
       "//": "Everything must arrive over TLS.",
       "Sid": "DenyPlaintext",
       "Effect": "Deny",
