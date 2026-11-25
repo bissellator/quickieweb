@@ -28,7 +28,7 @@ import * as registry from "./lib/registry.mjs";
 import {
   hostToSiteId, checkSiteId, newSiteRecord, normalizeMembers,
   validateMemberChange, canAdminister, canEdit, roleInSite, SITE_ROLES, hostForSite,
-  ACCESS_LEVELS, levelForRole, COMMENT_WHO, logSourcesFor,
+  ACCESS_LEVELS, levelForRole, COMMENT_WHO, logSourcesFor, siteOwnHosts,
 } from "../shared/site.mjs";
 import { desiredEdgeState, planEdgeSync } from "../shared/access-plan.mjs";
 import { signGrant } from "../shared/access-token.mjs";
@@ -129,16 +129,9 @@ function logBucketFor(site, store) {
   return store.LOG_BUCKET || (site.storage?.driver === "prefix" ? HOSTED.logBucket : "");
 }
 
-// Every name the site answers at, so a click between its own pages is never a
-// referrer: baseUrl, the custom domain, and the hosted subdomain. Used when
-// logs are folded in and again when the report is read (older days predate it).
-function ownHostsFor(site) {
-  return [
-    site.site.baseUrl ? new URL(site.site.baseUrl).hostname : "",
-    site.site.domain ?? "",
-    HOSTED.domain && site.storage?.driver === "prefix" ? hostForSite(site.siteId, HOSTED.domain) : "",
-  ];
-}
+// Every name the site answers at (shared/site.mjs siteOwnHosts). Used when logs
+// are folded in and again when the report is read (older days predate it).
+const ownHostsFor = (site) => siteOwnHosts(site, { hostedDomain: HOSTED.domain });
 
 // Fold any newly delivered log objects into a site's stored report. The Stats
 // tab's Process button and the hourly schedule (processAllStats) both land here.

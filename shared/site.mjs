@@ -118,6 +118,26 @@ export function logSourcesFor(site, { hostedDomain = "" } = {}) {
 }
 
 /**
+ * Every hostname a site answers at, so a click between its own pages is never
+ * counted as a referrer: baseUrl, the custom domain, the hosted subdomain, and
+ * the *.cloudfront.net names of its own distributions. The shared hosted
+ * distribution's name is left out: every tenant answers there, so a link from
+ * it is not necessarily this site.
+ */
+export function siteOwnHosts(site, { hostedDomain = "" } = {}) {
+  const st = site.storage ?? {};
+  let base = "";
+  if (site.site?.baseUrl) base = new URL(site.site.baseUrl).hostname;
+  return [...new Set([
+    base,
+    site.site?.domain ?? "",
+    hostedDomain && st.driver === "prefix" ? hostForSite(site.siteId, hostedDomain) : "",
+    st.driver === "prefix" ? "" : st.distributionDomain ?? "",
+    ...(st.mirrorDistributionDomains ?? []),
+  ].map((h) => String(h).toLowerCase()).filter(Boolean))];
+}
+
+/**
  * Is this id available to hand out? Reserved names are refused even to staff:
  * the point is that they never become a tenant's, not that they are hard to get.
  */
@@ -165,6 +185,11 @@ export function normalizeStorage(raw = {}) {
     // this site's live prefix. Publish invalidates them too; see store.publish.
     mirrorDistributionIds: Array.isArray(raw.mirrorDistributionIds)
       ? raw.mirrorDistributionIds.filter((id) => typeof id === "string" && /^[A-Z0-9]{8,20}$/.test(id))
+      : [],
+    // Those distributions' own *.cloudfront.net names. The site answers at them
+    // too, so a click between its pages there is not a referrer (siteOwnHosts).
+    mirrorDistributionDomains: Array.isArray(raw.mirrorDistributionDomains)
+      ? raw.mirrorDistributionDomains.filter((d) => typeof d === "string" && /^[a-z0-9]+\.cloudfront\.net$/.test(d))
       : [],
   };
 

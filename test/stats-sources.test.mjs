@@ -181,3 +181,21 @@ test("loadGeo: the site's own database wins; the shared one is only a fallback",
   await loadGeo(store, { fallback: async () => { fellBack = true; return null; } });
   assert.equal(fellBack, true);
 });
+
+// Every name the site answers at is "us" in Stats, including its own mirror
+// distribution's *.cloudfront.net name (seen as a referrer on stuckinawoman).
+test("siteOwnHosts lists every name a hosted site answers at", async () => {
+  const { siteOwnHosts, normalizeSite } = await import("../shared/site.mjs");
+  const site = normalizeSite({
+    siteId: "stuckinawoman",
+    site: { title: "S", baseUrl: "https://www.stuckinawoman.com", domain: "www.stuckinawoman.com" },
+    storage: {
+      driver: "prefix", prefix: "sites/stuckinawoman/", distributionDomain: "d19wnv47n55d38.cloudfront.net",
+      mirrorDistributionIds: ["E1IVLQSMM1AGFH"], mirrorDistributionDomains: ["d1s6xp4lvx5dqg.cloudfront.net", "evil.example.com"],
+    },
+  });
+  assert.deepEqual(site.storage.mirrorDistributionDomains, ["d1s6xp4lvx5dqg.cloudfront.net"], "only cloudfront names are kept");
+  assert.deepEqual(siteOwnHosts(site, { hostedDomain: "quickieweb.com" }), [
+    "www.stuckinawoman.com", "stuckinawoman.quickieweb.com", "d1s6xp4lvx5dqg.cloudfront.net",
+  ], "the shared distribution's name is every tenant's, so it is not listed");
+});

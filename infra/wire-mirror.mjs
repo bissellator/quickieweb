@@ -20,6 +20,8 @@
 //   live bucket      the mirror may read sites/<site>/* and nothing else
 //                    (infra/lib/mirror-policy.mjs, also applied by provision-hosted)
 //   site record      storage.mirrorDistributionIds, so publish invalidates it;
+//                    storage.mirrorDistributionDomains, so Stats does not count
+//                    its *.cloudfront.net name as a referrer;
 //                    site.baseUrl/domain when --base-url is given
 //
 // Then re-run infra/deploy-lambda.mjs: the Lambda role may only invalidate the
@@ -177,6 +179,10 @@ try {
   step(6, "Site record");
   const record = structuredClone(raw);
   record.storage.mirrorDistributionIds = [...new Set([...(record.storage.mirrorDistributionIds ?? []), DIST])];
+  // Its *.cloudfront.net name, so Stats knows a click from it is the site itself.
+  const { Distribution: { DomainName: distDomain } } = await cf(["get-distribution", "--id", DIST]);
+  record.storage.mirrorDistributionDomains =
+    [...new Set([...(record.storage.mirrorDistributionDomains ?? []), distDomain])];
   if (BASE_URL) {
     record.site.baseUrl = BASE_URL;
     record.site.domain = BASE_URL.replace(/^https:\/\//, "");
